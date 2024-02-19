@@ -35,20 +35,15 @@
 // Import the April ASR library
 use aprilasr::{init_april_api, Model, ResultType, Session, Token};
 
-use std::fs::File;
-use std::io::{self, BufReader, Read, Seek, SeekFrom};
-use std::sync::Once;
+use std::io::{self, BufReader, Read};
+use std::ops::Deref;
+use std::sync::{Mutex, Once};
 use std::time::Duration;
 use std::{fmt, thread};
 
-/// Hard-coded path to wav file. Generate wav file by script
-/// using the wav_maker shell script in the project source.
-const WAV_FILE_PATH: &str = "mono_16bit16khz.wav";
-
-/// Specify the wav file header size so it can be skipped
-/// when reading the file. A PCM16 wav file has a RIFF header
-/// and a few other parts which make for a size of 44 bytes.
-const WAV_HEADER_SIZE: u64 = 44;
+use lazy_static::lazy_static;
+use mouse_keyboard_input::key_codes::*;
+use mouse_keyboard_input::VirtualDevice;
 
 /// April model you wish to use. Download a model using the
 /// getmodel.sh shell script in the project source or using
@@ -69,15 +64,10 @@ fn initialize() {
     INIT.call_once(|| init_april_api(1));
 }
 
-fn example_handler(result_type: ResultType) {
-    // dbg!(result_type.clone());
-    let (prefix, tokens_str) = match result_type {
-        ResultType::RecognitionFinal(tokens) => ("@ ", tokens_to_string(tokens.unwrap())),
-        ResultType::RecognitionPartial(tokens) => ("- ", tokens_to_string(tokens.unwrap())),
-        ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => (".", String::new()),
-    };
-
-    println!("{}{}", prefix, tokens_str);
+lazy_static! {
+    static ref DEVICE: Mutex<VirtualDevice> = Mutex::new(
+        VirtualDevice::default().expect("failed to create global uinput virtual device")
+    );
 }
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
@@ -148,6 +138,67 @@ where
     Ok(buffer)
 }
 
+fn example_handler(result_type: ResultType) {
+    // dbg!(result_type.clone());
+    let (prefix, tokens_str) = match result_type {
+        ResultType::RecognitionFinal(tokens) => {
+            let s = tokens_to_string(tokens.unwrap());
+            voice_command(&s);
+            ("@ ", s)
+        }
+        ResultType::RecognitionPartial(tokens) => ("- ", tokens_to_string(tokens.unwrap())),
+        ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => (".", String::new()),
+    };
+
+    println!("{}{}", prefix, tokens_str);
+}
+
+fn voice_command(s: &str) {
+    let mut device = DEVICE.lock().unwrap();
+    if s.contains("UP") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_DOT);
+        device.release(KEY_DOT);
+        device.release(KEY_LEFTMETA);
+    }
+    if s.contains("DOWN") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_COMMA);
+        device.release(KEY_COMMA);
+        device.release(KEY_LEFTMETA);
+    }
+    if s.contains("STACK") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_I);
+        device.release(KEY_I);
+        device.release(KEY_LEFTMETA);
+    }
+    if s.contains("RELEASE") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_O);
+        device.release(KEY_O);
+        device.release(KEY_LEFTMETA);
+    }
+    if s.contains("EXIT") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_Q);
+        device.release(KEY_Q);
+        device.release(KEY_LEFTMETA);
+    }
+    if s.contains("CONSOLE") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_1);
+        device.release(KEY_1);
+        device.release(KEY_LEFTMETA);
+    }
+    if s.contains("QUICK SETTING") {
+        device.press(KEY_LEFTMETA);
+        device.press(KEY_S);
+        device.release(KEY_S);
+        device.release(KEY_LEFTMETA);
+    }
+}
+
 /// Main function demonstrating basic usage of the April ASR library.
 fn main() -> Result<(), io::Error> {
     initialize(); // Initialize April ASR. Required to load a Model.
@@ -157,6 +208,11 @@ fn main() -> Result<(), io::Error> {
 
     // Print model metadata
     let model_sample_rate = model.sample_rate();
+
+    {
+        // To actually initialize the virtual device
+        DEVICE.lock().unwrap();
+    }
 
     println!();
     if let Ok(session) = Session::new(model, example_handler, true, true) {
@@ -189,10 +245,5 @@ fn main() -> Result<(), io::Error> {
     } else {
         eprintln!("Failed to create ASR session.");
     }
-
-    println!();
-    println!();
-    println!("done");
-
     Ok(())
 }
