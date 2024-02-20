@@ -3,18 +3,19 @@
 Poor man's linux voice automation.
 
 ### Goals
-- [ ] Wake phrase "Tempest rise" and sleep phrase "Tempest rest"
+- [x] Wake phrase "Tempest rise" and sleep phrase "Tempest rest"
 - [ ] Shortcut customization using config files
 - [ ] Recording built into the binary
 - [ ] Static builds
 
 ### Getting started
 
-This project was created with fulfilling a personal need and therefore has some opinionated settings (for now).
+This project was created for fulfilling a personal need and therefore has some opinionated settings (for now).
 
-You need NixOS or a distro that is infected with Nix.
-
-Having pulseaudio installed is also a prerequisite.
+Prerequisites:
+- NixOS (or a Nix infected distro)
+- Pulseaudio installed
+- GNOME with PaperWM (for now)
 
 Once you have installed the necessary tools, clone this repo.
 
