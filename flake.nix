@@ -11,12 +11,13 @@
           devShells.default = pkgs.mkShell rec {
             packages = with pkgs;
             [
+              rustc
+              cargo
               cmake
               clang
-              gcc
               onnxruntime
-              pulseaudio
               pkg-config
+              alsa-lib
             ];
 
             LD_LIBRARY_PATH = "${nixpkgs.lib.makeLibraryPath packages}";

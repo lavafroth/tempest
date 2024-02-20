@@ -1,44 +1,10 @@
-//!
-//! aprilasr - rust bindings for the april-asr C api (libaprilasr)
-//! Copyright (C) 2024  VHS <vhsdev@tutanota.com>
-//!
-//! This file is part of aprilasr.
-//!
-//! aprilasr is free software: you can redistribute it and/or modify
-//! it under the terms of the GNU General Public License as published by
-//! the Free Software Foundation, either version 3 of the License, or
-//! (at your option) any later version.
-//!
-//! aprilasr is distributed in the hope that it will be useful,
-//! but WITHOUT ANY WARRANTY; without even the implied warranty of
-//! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//! GNU General Public License for more details.
-//!
-//! You should have received a copy of the GNU General Public License
-//! along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//!
-
-//! # April ASR Library Example
-//!
-//! This example Rust file showcases basic usage of the April ASR library.
-//!
-//! ## Setup
-//!
-//! 1. Run `./makewav.sh` to create a sample English wavefile.
-//! 1. Run `./getmodel.sh` to download the English April model.
-//! 1. Then run `cargo run --example async` to run this file.
-//!
-//! ## Usage
-//!
-//! Run this file to see the basic functionality of the April ASR library in action.
-
-// Import the April ASR library
+use anyhow::Result;
 use aprilasr::{init_april_api, Model, ResultType, Session, Token};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::StreamConfig;
+use std::sync::{self};
 
-use std::io::{self, BufReader, Read};
 use std::sync::{Mutex, Once};
-use std::time::Duration;
-use std::{fmt, thread};
 
 use lazy_static::lazy_static;
 use mouse_keyboard_input::key_codes::*;
@@ -47,9 +13,6 @@ use mouse_keyboard_input::VirtualDevice;
 // Path to the april model
 // TODO: make this part of the config file
 const APRIL_MODEL_PATH: &str = "model.april";
-
-// Size of read buffer for input WAV file.
-const DEFAULT_BUFFER_SIZE: usize = 4096;
 
 #[derive(Default)]
 pub struct State {
@@ -80,69 +43,6 @@ lazy_static! {
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
     tokens_str.join("")
-}
-
-#[derive(Debug)]
-enum WavFileError {
-    IoError(io::Error),
-}
-
-impl fmt::Display for WavFileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            WavFileError::IoError(err) => write!(f, "IO error: {}", err),
-        }
-    }
-}
-
-impl From<io::Error> for WavFileError {
-    fn from(err: io::Error) -> Self {
-        WavFileError::IoError(err)
-    }
-}
-
-/// Reads data from the provided `reader` in chunks and returns the concatenated result.
-///
-/// This function takes a mutable reference to a type implementing the `Read` trait (`reader`),
-/// reads data from it in chunks, and concatenates the chunks into a single `Vec<u8>` buffer.
-///
-/// # Arguments
-///
-/// - `reader`: A mutable reference to a type implementing the `Read` trait, providing the input data.
-/// - `buffer_size`: An optional parameter specifying the size of each chunk to read. If `Some(size)` is provided,
-///                  the function reads in chunks of the specified size. If `None`, it reads the entire content.
-///
-/// # Returns
-///
-/// Returns a `Result` with a `Vec<u8>` containing the concatenated data if the read operation is successful.
-/// If an error occurs during the reading process, an `Err` variant is returned with an associated `io::Error`.
-///
-/// # Errors
-///
-/// This function may return an error if there is an issue reading from the provided `reader`.
-/// The error type is an `io::Error` indicating the nature of the failure.
-///
-/// # Panics
-///
-/// This function may panic if there is an unexpected error during the internal memory allocation of the buffer.
-/// While such panics are uncommon in normal usage, they may indicate a serious problem.
-///
-/// # Default Buffer Size
-///
-/// The default buffer size, used when `buffer_size` is not explicitly provided, is set to `DEFAULT_BUFFER_SIZE`.
-/// You can adjust this constant according to your specific requirements.
-fn read_wav_file<R>(reader: &mut R, buffer_size: Option<usize>) -> Result<Vec<u8>, WavFileError>
-where
-    R: Read,
-{
-    // Allocate a buffer with the specified or default size
-    let buffer_size = buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE);
-    let mut buffer = Vec::with_capacity(buffer_size);
-
-    // Read as much data as available, without requiring the buffer to be completely filled
-    reader.take(buffer_size as u64).read_to_end(&mut buffer)?;
-
-    Ok(buffer)
 }
 
 const WAKE_PHRASE: &'static str = "TEMPEST RISE";
@@ -220,6 +120,10 @@ fn voice_command(s: &str) -> bool {
         key_chord(&[KEY_LEFTMETA, KEY_Q]);
         return true;
     }
+    if s.contains("CYCLE") {
+        key_chord(&[KEY_LEFTMETA, KEY_R]);
+        return true;
+    }
     if s.contains("CONSOLE") {
         key_chord(&[KEY_LEFTMETA, KEY_1]);
         return true;
@@ -233,14 +137,12 @@ fn voice_command(s: &str) -> bool {
 }
 
 /// Main function demonstrating basic usage of the April ASR library.
-fn main() -> Result<(), io::Error> {
+fn main() -> Result<()> {
+    let device = cpal::default_host()
+        .default_input_device()
+        .expect("no output device available");
+
     initialize(); // Initialize April ASR. Required to load a Model.
-
-    // Load an April ASR model from a file
-    let model = Model::new(APRIL_MODEL_PATH).unwrap();
-
-    // Print model metadata
-    let model_sample_rate = model.sample_rate();
 
     // To actually initialize the virtual device
     drop(
@@ -248,37 +150,38 @@ fn main() -> Result<(), io::Error> {
             .lock()
             .expect("failed to get handle to virtual device"),
     );
+    let model = Model::new(APRIL_MODEL_PATH).unwrap();
 
-    println!();
-    if let Ok(session) = Session::new(model, example_handler, true, true) {
-        // let file = File::open(WAV_FILE_PATH)?;
-        let mut buf_reader = BufReader::new(io::stdin());
+    let (tx, rx) = sync::mpsc::channel();
 
-        // Skip processing the wav file header
-        // buf_reader.seek(SeekFrom::Start(WAV_HEADER_SIZE))?;
-
-        // Read the WAV file in chunks until the end
-        while let Some(buffer) = match read_wav_file(&mut buf_reader, Some(model_sample_rate)) {
-            Ok(data) => Some(data),
-            Err(err) => {
-                eprintln!("Error reading WAV file: {}", err);
-                None
-            }
-        } {
-            if buffer.is_empty() {
-                break; // End of file
-            }
-
-            // Feed PCM16 audio data to the session
-            session.feed_pcm16(buffer);
-            thread::sleep(Duration::from_millis(100));
+    // Flush the session after processing all data
+    let stream = device
+        .build_input_stream(
+            &StreamConfig {
+                channels: 1,
+                sample_rate: cpal::SampleRate(16000),
+                buffer_size: cpal::BufferSize::Default,
+            },
+            move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                tx.send(data.to_vec()).expect("unable to transmit audio");
+            },
+            move |err| {
+                eprintln!("{err}");
+            },
+            None,
+        )
+        .expect("whoa big chungus");
+    let session = match Session::new(model, example_handler, true, true) {
+        Ok(session) => session,
+        Err(_) => anyhow::bail!("session creation failed lol"),
+    };
+    stream.play()?;
+    for bytes in rx {
+        for pcm16 in bytes {
+            // SAFETY: in all circumstances, an i16 can be transmuted into two bytes.
+            let byte_pair = unsafe { std::mem::transmute_copy::<i16, [u8; 2]>(&pcm16) };
+            session.feed_pcm16(byte_pair.to_vec());
         }
-
-        // Flush the session after processing all data
-        println!("Flushing session");
-        session.flush();
-    } else {
-        eprintln!("Failed to create ASR session.");
     }
     Ok(())
 }
