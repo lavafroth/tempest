@@ -15,6 +15,8 @@
               clang
               gcc
               onnxruntime
+              pulseaudio
+              pkg-config
             ];
 
             LD_LIBRARY_PATH = "${nixpkgs.lib.makeLibraryPath packages}";

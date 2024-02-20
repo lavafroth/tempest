@@ -36,7 +36,6 @@
 use aprilasr::{init_april_api, Model, ResultType, Session, Token};
 
 use std::io::{self, BufReader, Read};
-use std::ops::Deref;
 use std::sync::{Mutex, Once};
 use std::time::Duration;
 use std::{fmt, thread};
@@ -53,6 +52,13 @@ const APRIL_MODEL_PATH: &str = "model.april";
 // Size of read buffer for input WAV file.
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 
+#[derive(Default)]
+pub struct State {
+    position: usize,
+    length: usize,
+    already_commanded: bool,
+}
+
 /// Initialize the April API with version 1 one time only.
 ///
 /// The function uses the `call_once` method on a static `INIT` variable. Within the closure
@@ -68,6 +74,7 @@ lazy_static! {
     static ref DEVICE: Mutex<VirtualDevice> = Mutex::new(
         VirtualDevice::default().expect("failed to create global uinput virtual device")
     );
+    static ref TOKENS: Mutex<State> = Mutex::new(State::default());
 }
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
@@ -142,61 +149,84 @@ fn example_handler(result_type: ResultType) {
     // dbg!(result_type.clone());
     let (prefix, tokens_str) = match result_type {
         ResultType::RecognitionFinal(tokens) => {
-            let s = tokens_to_string(tokens.unwrap());
-            voice_command(&s);
-            ("@ ", s)
+            let sentence = tokens_to_string(tokens.unwrap());
+            let mut state = TOKENS.lock().unwrap();
+            println!("already commanded: {}", state.already_commanded);
+            if !state.already_commanded {
+                voice_command(&sentence);
+            }
+            state.position = 0;
+            state.already_commanded = false;
+            ("@ ", sentence)
         }
-        ResultType::RecognitionPartial(tokens) => ("- ", tokens_to_string(tokens.unwrap())),
+        ResultType::RecognitionPartial(tokens) => {
+            let mut state = TOKENS.lock().unwrap();
+            let sentence = tokens_to_string(tokens.unwrap());
+            if let Some(s) = sentence.get(state.position..) {
+                println!("-{s}");
+                let old = state.position;
+                if sentence.len() > state.length {
+                    state.position = sentence.rfind(' ').unwrap_or(old);
+                    if voice_command(&s) {
+                        state.already_commanded = true;
+                        state.position = sentence.len();
+                    }
+                    state.length = sentence.len();
+                }
+            }
+            ("-", "".to_string())
+        }
         ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => (".", String::new()),
     };
 
     println!("{}{}", prefix, tokens_str);
 }
 
-fn voice_command(s: &str) {
+fn key_chord(keys: &[u16]) {
     let mut device = DEVICE.lock().unwrap();
+    for &key in keys {
+        device
+            .press(key)
+            .expect("failed to press key through uinput");
+    }
+    for &key in keys.iter().rev() {
+        device
+            .release(key)
+            .expect("failed to release key through uinput");
+    }
+}
+
+fn voice_command(s: &str) -> bool {
     if s.contains("UP") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_DOT);
-        device.release(KEY_DOT);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_DOT]);
+        return true;
     }
     if s.contains("DOWN") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_COMMA);
-        device.release(KEY_COMMA);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_COMMA]);
+        return true;
     }
     if s.contains("STACK") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_I);
-        device.release(KEY_I);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_I]);
+        return true;
     }
     if s.contains("RELEASE") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_O);
-        device.release(KEY_O);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_O]);
+        return true;
     }
     if s.contains("EXIT") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_Q);
-        device.release(KEY_Q);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_Q]);
+        return true;
     }
     if s.contains("CONSOLE") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_1);
-        device.release(KEY_1);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_1]);
+        return true;
     }
     if s.contains("QUICK SETTING") {
-        device.press(KEY_LEFTMETA);
-        device.press(KEY_S);
-        device.release(KEY_S);
-        device.release(KEY_LEFTMETA);
+        key_chord(&[KEY_LEFTMETA, KEY_S]);
+        return true;
     }
+
+    return false;
 }
 
 /// Main function demonstrating basic usage of the April ASR library.
@@ -209,10 +239,12 @@ fn main() -> Result<(), io::Error> {
     // Print model metadata
     let model_sample_rate = model.sample_rate();
 
-    {
-        // To actually initialize the virtual device
-        DEVICE.lock().unwrap();
-    }
+    // To actually initialize the virtual device
+    drop(
+        DEVICE
+            .lock()
+            .expect("failed to get handle to virtual device"),
+    );
 
     println!();
     if let Ok(session) = Session::new(model, example_handler, true, true) {
