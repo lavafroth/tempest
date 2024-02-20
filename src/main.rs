@@ -44,9 +44,8 @@ use lazy_static::lazy_static;
 use mouse_keyboard_input::key_codes::*;
 use mouse_keyboard_input::VirtualDevice;
 
-/// April model you wish to use. Download a model using the
-/// getmodel.sh shell script in the project source or using
-/// any of the download links in the April ASR documentation.
+// Path to the april model
+// TODO: make this part of the config file
 const APRIL_MODEL_PATH: &str = "model.april";
 
 // Size of read buffer for input WAV file.
@@ -57,6 +56,7 @@ pub struct State {
     position: usize,
     length: usize,
     already_commanded: bool,
+    listening: bool,
 }
 
 /// Initialize the April API with version 1 one time only.
@@ -145,28 +145,34 @@ where
     Ok(buffer)
 }
 
+const WAKE_PHRASE: &'static str = "TEMPEST RISE";
+const SLEEP_PHRASE: &'static str = "TEMPEST REST";
+
 fn example_handler(result_type: ResultType) {
-    // dbg!(result_type.clone());
-    let (prefix, tokens_str) = match result_type {
+    match result_type {
         ResultType::RecognitionFinal(tokens) => {
             let sentence = tokens_to_string(tokens.unwrap());
             let mut state = TOKENS.lock().unwrap();
-            println!("already commanded: {}", state.already_commanded);
-            if !state.already_commanded {
+            if !state.already_commanded && state.listening {
                 voice_command(&sentence);
             }
+            if sentence.contains(WAKE_PHRASE) {
+                state.listening = true;
+            }
+            if sentence.contains(SLEEP_PHRASE) {
+                state.listening = false;
+            }
+            state.length = 0;
             state.position = 0;
             state.already_commanded = false;
-            ("@ ", sentence)
         }
         ResultType::RecognitionPartial(tokens) => {
             let mut state = TOKENS.lock().unwrap();
             let sentence = tokens_to_string(tokens.unwrap());
             if let Some(s) = sentence.get(state.position..) {
                 println!("-{s}");
-                let old = state.position;
-                if sentence.len() > state.length {
-                    state.position = sentence.rfind(' ').unwrap_or(old);
+                if state.listening && sentence.len() > state.length {
+                    state.position = sentence.rfind(' ').unwrap_or(state.position);
                     if voice_command(&s) {
                         state.already_commanded = true;
                         state.position = sentence.len();
@@ -174,12 +180,9 @@ fn example_handler(result_type: ResultType) {
                     state.length = sentence.len();
                 }
             }
-            ("-", "".to_string())
         }
-        ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => (".", String::new()),
-    };
-
-    println!("{}{}", prefix, tokens_str);
+        ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => {}
+    }
 }
 
 fn key_chord(keys: &[u16]) {
