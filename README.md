@@ -6,6 +6,7 @@ Poor man's linux voice automation.
 - [x] Wake phrase "Tempest rise" and sleep phrase "Tempest rest"
 - [ ] Shortcut customization using config files
 - [x] Recording built into the binary
+- [x] Sending fuzzy questions to an LLM through Ollama's API
 - [ ] Static builds
 
 ### Getting started
