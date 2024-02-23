@@ -1,10 +1,9 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Context, Result};
 use aprilasr::{init_april_api, Model, ResultType, Session, Token};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{self};
 
 use std::sync::{Mutex, Once};
 use std::time::Duration;
@@ -24,6 +23,7 @@ pub struct State {
     already_commanded: bool,
     listening: bool,
     infer: bool,
+    to_ollama: Option<Sender<String>>,
 }
 
 /// Initialize the April API with version 1 one time only.
@@ -41,17 +41,7 @@ lazy_static! {
     static ref DEVICE: Mutex<VirtualDevice> = Mutex::new(
         VirtualDevice::default().expect("failed to create global uinput virtual device")
     );
-    static ref TOKENS: Mutex<State> = Mutex::new(State::default());
-    // THIS IS FUCKIN RIDICULOUS
-    static ref OLLAMA: Mutex<(
-        Option<Sender<String>>,
-        Option<Receiver<String>>
-    )> = Mutex::new(create_global_channels());
-}
-
-fn create_global_channels() -> (Option<Sender<String>>, Option<Receiver<String>>) {
-    let (tx, rx) = channel();
-    (Some(tx), Some(rx))
+    static ref STATE: Mutex<State> = Mutex::new(State::default());
 }
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
@@ -59,8 +49,8 @@ fn tokens_to_string(tokens: Vec<Token>) -> String {
     tokens_str.join("")
 }
 
-const WAKE_PHRASE: &[&'static str] = &["TEMPEST", "RISE"];
-const SLEEP_PHRASE: &[&'static str] = &["TEMPEST", "REST"];
+const WAKE_PHRASE: &[&str] = &["TEMPEST", "RISE"];
+const SLEEP_PHRASE: &[&str] = &["TEMPEST", "REST"];
 
 #[derive(Serialize)]
 pub struct LLMRequest {
@@ -79,7 +69,7 @@ pub struct LLMResponse {
     message: LLMMessage,
 }
 
-fn call_ollama(recv: Receiver<String>) {
+fn ollama_handler(recv: Receiver<String>) {
     for prompt in recv {
         log::info!("sending to ollama: {}", prompt);
         let client = reqwest::blocking::ClientBuilder::new()
@@ -97,7 +87,23 @@ fn call_ollama(recv: Receiver<String>) {
                 stream: false,
             })
             .send();
-        let LLMResponse { message } = resp.unwrap().json().unwrap();
+
+        let resp = match resp {
+            Ok(resp) => resp,
+            Err(e) => {
+                log::error!("failed to send fuzzy language request to ollama: {e}");
+                return;
+            }
+        };
+
+        let message = match resp.json() {
+            Ok(LLMResponse { message }) => message,
+            Err(e) => {
+                log::error!("failed to parse JSON response from ollama: {e}");
+                return;
+            }
+        };
+
         log::info!("response from ollama: {}", message.content);
     }
 }
@@ -106,17 +112,15 @@ fn example_handler(result_type: ResultType) {
     match result_type {
         ResultType::RecognitionFinal(tokens) => {
             let sentence = tokens_to_string(tokens.unwrap());
-            let mut state = TOKENS.lock().unwrap();
+            let mut state = STATE.lock().unwrap();
             if !state.already_commanded && state.listening {
                 voice_command(&sentence);
             }
 
             if state.infer {
                 if let Some(prompt) = sentence.get(state.position..) {
-                    OLLAMA
-                        .lock()
-                        .unwrap()
-                        .0
+                    state
+                        .to_ollama
                         .clone()
                         .expect("could not get a handle to proompt sender channel")
                         .send(prompt.to_string())
@@ -129,18 +133,20 @@ fn example_handler(result_type: ResultType) {
             state.already_commanded = false;
         }
         ResultType::RecognitionPartial(tokens) => {
-            let mut state = TOKENS.lock().unwrap();
+            let mut state = STATE.lock().unwrap();
             let sentence = tokens_to_string(tokens.unwrap());
             if let Some(s) = sentence.get(state.position..) {
-                println!("-{s}");
+                let mode = if state.infer { "INFER" } else { "EAGER" };
+                log::info!("[{mode}]{s}");
                 state.listening |= subslice_check(&sentence, WAKE_PHRASE);
                 state.listening &= !subslice_check(&sentence, SLEEP_PHRASE);
                 if !state.infer && state.listening && sentence.len() > state.length {
                     state.position = sentence.rfind(' ').unwrap_or(state.position);
                     if subslice_check(s, &["LISTEN"]) {
                         state.infer = true;
+                        state.position = sentence.len();
                     }
-                    if voice_command(&s) {
+                    if voice_command(s) {
                         state.already_commanded = true;
                         state.position = sentence.len();
                     }
@@ -155,14 +161,14 @@ fn example_handler(result_type: ResultType) {
 fn key_chord(keys: &[u16]) {
     let mut device = DEVICE.lock().unwrap();
     for &key in keys {
-        device
-            .press(key)
-            .expect("failed to press key through uinput");
+        if let Err(e) = device.press(key) {
+            log::error!("failed to press key {key}: {e}");
+        }
     }
     for &key in keys.iter().rev() {
-        device
-            .release(key)
-            .expect("failed to release key through uinput");
+        if let Err(e) = device.release(key) {
+            log::error!("failed to release key {key}: {e}");
+        }
     }
 }
 
@@ -195,11 +201,11 @@ fn voice_command(s: &str) -> bool {
 
 /// Main function demonstrating basic usage of the April ASR library.
 fn main() -> Result<()> {
-    let device = cpal::default_host()
-        .default_input_device()
-        .expect("no output device available");
-
     simple_logger::init_with_level(log::Level::Info)?;
+
+    let Some(audio_device) = cpal::default_host().default_input_device() else {
+        bail!("no audio input device available");
+    };
 
     initialize(); // Initialize April ASR. Required to load a Model.
 
@@ -207,44 +213,48 @@ fn main() -> Result<()> {
     drop(
         DEVICE
             .lock()
-            .expect("failed to get handle to virtual device"),
+            .map_err(|_| anyhow!("failed to get handle to virtual device"))?,
     );
-    let model = Model::new(APRIL_MODEL_PATH).unwrap();
+    let model = match Model::new(APRIL_MODEL_PATH) {
+        Ok(model) => model,
+        Err(e) => bail!("failed to load april-asr model: {e}"),
+    };
 
-    let (tx, rx) = sync::mpsc::channel();
+    {
+        let (tx, rx) = channel();
+        STATE.lock().unwrap().to_ollama.replace(tx);
+        std::thread::spawn(|| ollama_handler(rx));
+    }
 
-    // Flush the session after processing all data
-    let stream = device
-        .build_input_stream(
-            &StreamConfig {
-                channels: 1,
-                sample_rate: cpal::SampleRate(16000),
-                buffer_size: cpal::BufferSize::Default,
-            },
-            move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                tx.send(data.to_vec())
-                    .expect("unable to send audio to model");
-            },
-            move |err| {
-                eprintln!("{err}");
-            },
-            None,
-        )
-        .expect("whoa big chungus");
+    let (tx, rx) = channel();
+    // create an audio stream
+    let maybe_stream = audio_device.build_input_stream(
+        &StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(16000),
+            buffer_size: cpal::BufferSize::Default,
+        },
+        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+            tx.send(data.to_vec())
+                .expect("unable to send audio to model");
+        },
+        move |err| {
+            log::error!("{err}");
+        },
+        None,
+    );
+
+    let stream = maybe_stream.context("failed to build audio input stream")?;
+
     let session = match Session::new(model, example_handler, true, true) {
         Ok(session) => session,
-        Err(_) => anyhow::bail!("session creation failed"),
+        Err(_) => bail!("failed to create april-asr speech recognition session"),
     };
     stream.play()?;
 
-    // God I fucking hate doing this with channels and mutexes.
-    let recv = OLLAMA.lock().unwrap().1.take().unwrap();
-    std::thread::spawn(|| call_ollama(recv));
     for bytes in rx {
         for pcm16 in bytes {
-            // SAFETY: in all circumstances, an i16 can be transmuted into two bytes.
-            let byte_pair = unsafe { std::mem::transmute_copy::<i16, [u8; 2]>(&pcm16) };
-            session.feed_pcm16(byte_pair.to_vec());
+            session.feed_pcm16(pcm16.to_le_bytes().to_vec());
         }
     }
     Ok(())
