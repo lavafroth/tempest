@@ -6,12 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
 
-use std::sync::{Mutex, Once};
+use std::sync::Mutex;
 use std::time::Duration;
 
-use lazy_static::lazy_static;
 use mouse_keyboard_input::key_codes::*;
 use mouse_keyboard_input::VirtualDevice;
 
@@ -25,25 +25,6 @@ pub struct State {
     listening: bool,
     infer: bool,
     to_ollama: Option<Sender<String>>,
-}
-
-/// Initialize the April API with version 1 one time only.
-///
-/// The function uses the `call_once` method on a static `INIT` variable. Within the closure
-/// passed to `call_once`, it invokes the `init_april_api` function, passing the provided version
-/// as an argument. This initialization pattern is common for scenarios where certain operations
-/// need to be performed only once, such as initializing global resources.
-fn initialize() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| init_april_api(1));
-}
-
-lazy_static! {
-    static ref DEVICE: Mutex<VirtualDevice> = Mutex::new(
-        VirtualDevice::default().expect("failed to create global uinput virtual device")
-    );
-    static ref STATE: Mutex<State> = Mutex::new(State::default());
-    static ref CONFIG: Mutex<Option<config::Config>> = Mutex::new(None);
 }
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
@@ -107,70 +88,19 @@ fn ollama_handler(recv: Receiver<String>) {
     }
 }
 
-fn example_handler(result_type: ResultType) {
-    let maybe_conf = CONFIG.lock().unwrap();
-    let conf = maybe_conf.as_ref().unwrap();
-    let wake_phrase: Vec<_> = conf.wake_phrase.split_whitespace().collect();
-    let rest_phrase: Vec<_> = conf.rest_phrase.split_whitespace().collect();
-    match result_type {
-        ResultType::RecognitionFinal(tokens) => {
-            let sentence = tokens_to_string(tokens.unwrap());
-            let mut state = STATE.lock().unwrap();
-            if !state.already_commanded && state.listening {
-                voice_command(&sentence);
-            }
+pub struct VirtualInput(VirtualDevice);
 
-            if state.infer {
-                if let Some(prompt) = sentence.get(state.position..) {
-                    state
-                        .to_ollama
-                        .clone()
-                        .expect("could not get a handle to proompt sender channel")
-                        .send(prompt.to_string())
-                        .expect("failed to send proompt");
-                }
-            }
-            state.length = 0;
-            state.position = 0;
-            state.infer = false;
-            state.already_commanded = false;
-        }
-        ResultType::RecognitionPartial(tokens) => {
-            let mut state = STATE.lock().unwrap();
-            let sentence = tokens_to_string(tokens.unwrap());
-            if let Some(s) = sentence.get(state.position..) {
-                let mode = if state.infer { "INFER" } else { "EAGER" };
-                log::info!("[{mode}]{s}");
-                state.listening |= subslice_check(&sentence, &wake_phrase);
-                state.listening &= !subslice_check(&sentence, &rest_phrase);
-                if !state.infer && state.listening && sentence.len() > state.length {
-                    state.position = sentence.rfind(' ').unwrap_or(state.position);
-                    if subslice_check(s, &["LISTEN"]) {
-                        state.infer = true;
-                        state.position = sentence.len();
-                    }
-                    if voice_command(s) {
-                        state.already_commanded = true;
-                        state.position = sentence.len();
-                    }
-                    state.length = sentence.len();
-                }
+impl VirtualInput {
+    fn key_chord(&mut self, keys: &[u16]) {
+        for &key in keys {
+            if let Err(e) = self.0.press(key) {
+                log::error!("failed to press key {key}: {e}");
             }
         }
-        ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => {}
-    }
-}
-
-fn key_chord(keys: &[u16]) {
-    let mut device = DEVICE.lock().unwrap();
-    for &key in keys {
-        if let Err(e) = device.press(key) {
-            log::error!("failed to press key {key}: {e}");
-        }
-    }
-    for &key in keys.iter().rev() {
-        if let Err(e) = device.release(key) {
-            log::error!("failed to release key {key}: {e}");
+        for &key in keys.iter().rev() {
+            if let Err(e) = self.0.release(key) {
+                log::error!("failed to release key {key}: {e}");
+            }
         }
     }
 }
@@ -182,9 +112,9 @@ fn subslice_check(s: &str, phrase: &[&str]) -> bool {
         .any(|window| window == phrase)
 }
 
-fn key_chord_for_phrase(s: &str, phrase: &[&str], keys: &[u16]) -> bool {
+fn key_chord_for_phrase(vd: &mut VirtualInput, s: &str, phrase: &[&str], keys: &[u16]) -> bool {
     if subslice_check(s, phrase) {
-        key_chord(keys);
+        vd.key_chord(keys);
         true
     } else {
         false
@@ -201,15 +131,15 @@ fn command_for_phrase(s: &str, phrase: &[&str], command: &str, args: &[&str]) ->
     check
 }
 
-fn voice_command(s: &str) -> bool {
-    key_chord_for_phrase(s, &["UP"], &[KEY_LEFTMETA, KEY_DOT])
-        || key_chord_for_phrase(s, &["DOWN"], &[KEY_LEFTMETA, KEY_COMMA])
-        || key_chord_for_phrase(s, &["STACK"], &[KEY_LEFTMETA, KEY_I])
-        || key_chord_for_phrase(s, &["RELEASE"], &[KEY_LEFTMETA, KEY_O])
-        || key_chord_for_phrase(s, &["EXIT"], &[KEY_LEFTMETA, KEY_Q])
-        || key_chord_for_phrase(s, &["CYCLE"], &[KEY_LEFTMETA, KEY_R])
-        || key_chord_for_phrase(s, &["QUICK", "SETTING"], &[KEY_LEFTMETA, KEY_S])
-        || key_chord_for_phrase(s, &["FILL"], &[KEY_LEFTMETA, KEY_F])
+fn voice_command(vd: &mut VirtualInput, s: &str) -> bool {
+    key_chord_for_phrase(vd, s, &["UP"], &[KEY_LEFTMETA, KEY_DOT])
+        || key_chord_for_phrase(vd, s, &["DOWN"], &[KEY_LEFTMETA, KEY_COMMA])
+        || key_chord_for_phrase(vd, s, &["STACK"], &[KEY_LEFTMETA, KEY_I])
+        || key_chord_for_phrase(vd, s, &["RELEASE"], &[KEY_LEFTMETA, KEY_O])
+        || key_chord_for_phrase(vd, s, &["EXIT"], &[KEY_LEFTMETA, KEY_Q])
+        || key_chord_for_phrase(vd, s, &["CYCLE"], &[KEY_LEFTMETA, KEY_R])
+        || key_chord_for_phrase(vd, s, &["QUICK", "SETTING"], &[KEY_LEFTMETA, KEY_S])
+        || key_chord_for_phrase(vd, s, &["FILL"], &[KEY_LEFTMETA, KEY_F])
         || command_for_phrase(s, &["CONSOLE"], "blackbox", &[])
         || command_for_phrase(s, &["BROWSER"], "librewolf", &[])
         || command_for_phrase(
@@ -240,31 +170,26 @@ fn main() -> Result<()> {
         bail!("no audio input device available");
     };
 
-    initialize(); // Initialize April ASR. Required to load a Model.
+    init_april_api(1); // Initialize April ASR. Required to load a Model.
 
     // To actually initialize the virtual device
-    drop(
-        DEVICE
-            .lock()
-            .map_err(|_| anyhow!("failed to get handle to virtual device"))?,
-    );
+    let device = VirtualDevice::default().expect("failed to create global uinput virtual device");
 
     let conf: config::Config = {
         let reader = File::open("config.yml")?;
         serde_yaml::from_reader(reader)?
     };
 
+    let mut state = State::default();
+
     let model =
         Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
 
     {
         let (tx, rx) = channel();
-        STATE.lock().unwrap().to_ollama.replace(tx);
+        state.to_ollama.replace(tx);
         std::thread::spawn(|| ollama_handler(rx));
     }
-
-    CONFIG.lock().unwrap().replace(conf);
-
     let (tx, rx) = channel();
     // create an audio stream
     let maybe_stream = audio_device.build_input_stream(
@@ -285,11 +210,67 @@ fn main() -> Result<()> {
 
     let stream = maybe_stream.context("failed to build audio input stream")?;
 
+    let (session_tx, session_rx) = channel();
+
     // TODO: change the callback to a channel Sender in the vendored library
-    let session = match Session::new(&model, example_handler, true, false) {
+    let session = match Session::new(&model, session_tx, true, false) {
         Ok(session) => session,
         Err(_) => bail!("failed to create april-asr speech recognition session"),
     };
+
+    thread::spawn(move || {
+        let mut device = VirtualInput(device);
+        let wake_phrase: Vec<_> = conf.wake_phrase.split_whitespace().collect();
+        let rest_phrase: Vec<_> = conf.rest_phrase.split_whitespace().collect();
+        for result_type in session_rx {
+            match result_type {
+                ResultType::RecognitionFinal(tokens) => {
+                    let sentence = tokens_to_string(tokens.unwrap());
+                    if !state.already_commanded && state.listening {
+                        voice_command(&mut device, &sentence);
+                    }
+
+                    if state.infer {
+                        if let Some(prompt) = sentence.get(state.position..) {
+                            state
+                                .to_ollama
+                                .clone()
+                                .expect("could not get a handle to proompt sender channel")
+                                .send(prompt.to_string())
+                                .expect("failed to send proompt");
+                        }
+                    }
+                    state.length = 0;
+                    state.position = 0;
+                    state.infer = false;
+                    state.already_commanded = false;
+                }
+                ResultType::RecognitionPartial(tokens) => {
+                    let sentence = tokens_to_string(tokens.unwrap());
+                    if let Some(s) = sentence.get(state.position..) {
+                        let mode = if state.infer { "INFER" } else { "EAGER" };
+                        log::info!("[{mode}]{s}");
+                        state.listening |= subslice_check(&sentence, &wake_phrase);
+                        state.listening &= !subslice_check(&sentence, &rest_phrase);
+                        if !state.infer && state.listening && sentence.len() > state.length {
+                            state.position = sentence.rfind(' ').unwrap_or(state.position);
+                            if subslice_check(s, &["LISTEN"]) {
+                                state.infer = true;
+                                state.position = sentence.len();
+                            }
+                            if voice_command(&mut device, s) {
+                                state.already_commanded = true;
+                                state.position = sentence.len();
+                            }
+                            state.length = sentence.len();
+                        }
+                    }
+                }
+                ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => {}
+            }
+        }
+    });
+
     stream.play()?;
 
     for bytes in rx {

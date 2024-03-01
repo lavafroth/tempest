@@ -23,7 +23,8 @@
 use aprilasr_sys::ffi as afi;
 use std::ffi::{c_char, c_float, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::{fmt, mem, process, slice};
+use std::sync::mpsc::Sender;
+use std::{default, fmt, process, slice};
 
 /// Exposes the April API version as defined by the FFI cast to `i32`.
 pub static APRIL_VERSION: i32 = afi::APRIL_VERSION as c_int;
@@ -433,7 +434,7 @@ impl From<afi::AprilToken> for Token {
 /// Enumeration of April configuration flags.
 ///
 /// This enum represents various configuration flags that can be used with the April library.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
 #[repr(i32)]
 pub enum ConfigFlagBits {
     /// Represents the zero bit.
@@ -444,6 +445,7 @@ pub enum ConfigFlagBits {
     /// The handler will be called from the background thread at some point later.
     /// The accuracy may be degraded depending on the system hardware.
     /// You may get an accuracy estimate by calling `aas_realtime_get_speedup`.
+    #[default]
     AsyncNoRealtime,
 
     /// Similar to `AsyncNoRealtime`, but does not degrade accuracy depending on system hardware.
@@ -661,22 +663,18 @@ impl Into<afi::AprilConfig> for Config {
 ///
 /// This builder pattern is designed to offer ergonomic and efficient configuration creation
 /// by using mutable references.
+#[derive(Default)]
 pub struct ConfigBuilder {
     speaker: Option<SpeakerID>,
     handler: Option<afi::AprilRecognitionResultHandler>,
     userdata: Option<*mut ::std::os::raw::c_void>,
-    flags: Option<ConfigFlagBits>,
+    flags: ConfigFlagBits,
 }
 
 impl ConfigBuilder {
     /// Creates a new `ConfigBuilder` with default values.
     pub fn new() -> Self {
-        Self {
-            speaker: Some(SpeakerID::default()),
-            handler: Some(afi::AprilRecognitionResultHandler::default()),
-            userdata: Some(::std::ptr::null_mut()),
-            flags: Some(ConfigFlagBits::AsyncNoRealtime),
-        }
+        Self::default()
     }
 
     /// Sets the speaker ID.
@@ -699,7 +697,7 @@ impl ConfigBuilder {
 
     /// Sets the configuration flags.
     pub fn flags(&mut self, flags: ConfigFlagBits) -> &mut Self {
-        self.flags = Some(flags);
+        self.flags = flags;
         self
     }
 
@@ -708,7 +706,7 @@ impl ConfigBuilder {
         let speaker = self.speaker.ok_or("Speaker ID not set")?;
         let handler = self.handler.ok_or("Recognition result handler not set")?;
         let userdata = self.userdata.ok_or("User-specific data not set")?;
-        let flags = self.flags.ok_or("Configuration flags not set")?;
+        let flags = self.flags;
 
         Ok(Config {
             speaker,
@@ -767,8 +765,14 @@ pub extern "C" fn handler_cb_wrapper(
             _ => unreachable!("Unexpected AprilResultType"),
         };
 
-        let callback: fn(ResultType) -> () = unsafe { mem::transmute(userdata) };
-        callback(result);
+        unsafe {
+            let userdata: *mut Sender<ResultType> = std::mem::transmute(userdata);
+            userdata
+                .as_mut()
+                .expect("unable to get a handle to the april result sender")
+                .send(result)
+                .expect("failed to send april result sender through the supplied channel");
+        }
     })) {
         eprintln!("{:?}", e);
         process::abort();
@@ -841,7 +845,7 @@ impl<'a> Session<'a> {
     /// [`Model`]: struct.Model.html
     pub fn new(
         model: &'a Model,
-        callback: fn(result: ResultType) -> (),
+        callback: Sender<ResultType>,
         asynchronous: bool,
         no_rt: bool,
         // speaker_name: &str,
@@ -853,7 +857,7 @@ impl<'a> Session<'a> {
             (true, false) => ConfigFlagBits::AsyncRealtime,
             _ => ConfigFlagBits::Zero,
         });
-        config_builder.userdata(callback as *mut std::os::raw::c_void);
+        config_builder.userdata(Box::into_raw(Box::new(callback)) as *mut std::os::raw::c_void);
         config_builder.handler(Some(handler_cb_wrapper));
         config_builder.speaker(SpeakerID::default()); // No speaker by default
 

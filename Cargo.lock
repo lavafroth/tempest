@@ -1323,7 +1323,6 @@ dependencies = [
  "anyhow",
  "aprilasr-sys",
  "cpal",
- "lazy_static",
  "log",
  "mouse-keyboard-input",
  "reqwest",

@@ -9,7 +9,6 @@ edition = "2021"
 anyhow = "1.0.80"
 aprilasr-sys = { path = "src/aprilasr-sys" }
 cpal = "0.15.2"
-lazy_static = "1.4.0"
 log = "0.4.20"
 mouse-keyboard-input = "0.4.1"
 reqwest = { version = "0.11.24", default-features = false, features = ["json", "blocking", "rustls"] }
