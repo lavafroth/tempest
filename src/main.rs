@@ -2,7 +2,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use aprilasr::{init_april_api, Model, ResultType, Session, Token};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
+use log::error;
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use std::sync::{Mutex, Once};
@@ -12,9 +15,7 @@ use lazy_static::lazy_static;
 use mouse_keyboard_input::key_codes::*;
 use mouse_keyboard_input::VirtualDevice;
 
-// Path to the april model
-// TODO: make this part of the config file
-const APRIL_MODEL_PATH: &str = "model.april";
+mod config;
 
 #[derive(Default)]
 pub struct State {
@@ -42,15 +43,13 @@ lazy_static! {
         VirtualDevice::default().expect("failed to create global uinput virtual device")
     );
     static ref STATE: Mutex<State> = Mutex::new(State::default());
+    static ref CONFIG: Mutex<Option<config::Config>> = Mutex::new(None);
 }
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
     tokens_str.join("")
 }
-
-const WAKE_PHRASE: &[&str] = &["TEMPEST", "RISE"];
-const SLEEP_PHRASE: &[&str] = &["TEMPEST", "REST"];
 
 #[derive(Serialize)]
 pub struct LLMRequest {
@@ -109,6 +108,10 @@ fn ollama_handler(recv: Receiver<String>) {
 }
 
 fn example_handler(result_type: ResultType) {
+    let maybe_conf = CONFIG.lock().unwrap();
+    let conf = maybe_conf.as_ref().unwrap();
+    let wake_phrase: Vec<_> = conf.wake_phrase.split_whitespace().collect();
+    let rest_phrase: Vec<_> = conf.rest_phrase.split_whitespace().collect();
     match result_type {
         ResultType::RecognitionFinal(tokens) => {
             let sentence = tokens_to_string(tokens.unwrap());
@@ -138,8 +141,8 @@ fn example_handler(result_type: ResultType) {
             if let Some(s) = sentence.get(state.position..) {
                 let mode = if state.infer { "INFER" } else { "EAGER" };
                 log::info!("[{mode}]{s}");
-                state.listening |= subslice_check(&sentence, WAKE_PHRASE);
-                state.listening &= !subslice_check(&sentence, SLEEP_PHRASE);
+                state.listening |= subslice_check(&sentence, &wake_phrase);
+                state.listening &= !subslice_check(&sentence, &rest_phrase);
                 if !state.infer && state.listening && sentence.len() > state.length {
                     state.position = sentence.rfind(' ').unwrap_or(state.position);
                     if subslice_check(s, &["LISTEN"]) {
@@ -188,6 +191,16 @@ fn key_chord_for_phrase(s: &str, phrase: &[&str], keys: &[u16]) -> bool {
     }
 }
 
+fn command_for_phrase(s: &str, phrase: &[&str], command: &str, args: &[&str]) -> bool {
+    let check = subslice_check(s, phrase);
+    if check {
+        if let Err(e) = Command::new(command).args(args).spawn() {
+            error!("failed to run command `{}`: {}", command, e);
+        }
+    };
+    check
+}
+
 fn voice_command(s: &str) -> bool {
     key_chord_for_phrase(s, &["UP"], &[KEY_LEFTMETA, KEY_DOT])
         || key_chord_for_phrase(s, &["DOWN"], &[KEY_LEFTMETA, KEY_COMMA])
@@ -195,8 +208,28 @@ fn voice_command(s: &str) -> bool {
         || key_chord_for_phrase(s, &["RELEASE"], &[KEY_LEFTMETA, KEY_O])
         || key_chord_for_phrase(s, &["EXIT"], &[KEY_LEFTMETA, KEY_Q])
         || key_chord_for_phrase(s, &["CYCLE"], &[KEY_LEFTMETA, KEY_R])
-        || key_chord_for_phrase(s, &["CONSOLE"], &[KEY_LEFTMETA, KEY_1])
         || key_chord_for_phrase(s, &["QUICK", "SETTING"], &[KEY_LEFTMETA, KEY_S])
+        || key_chord_for_phrase(s, &["FILL"], &[KEY_LEFTMETA, KEY_F])
+        || command_for_phrase(s, &["CONSOLE"], "blackbox", &[])
+        || command_for_phrase(s, &["BROWSER"], "librewolf", &[])
+        || command_for_phrase(
+            s,
+            &["SYSTEM", "CONFIG"],
+            "xdg-open",
+            &["/home/h/Public/dotfiles/configuration.nix"],
+        )
+        || command_for_phrase(
+            s,
+            &["SYSTEM", "REBUILD"],
+            "pkexec",
+            &[
+                "doas",
+                "nixos-rebuild",
+                "switch",
+                "--flake",
+                "/home/h/Public/dotfiles#cafe",
+            ],
+        )
 }
 
 /// Main function demonstrating basic usage of the April ASR library.
@@ -215,16 +248,22 @@ fn main() -> Result<()> {
             .lock()
             .map_err(|_| anyhow!("failed to get handle to virtual device"))?,
     );
-    let model = match Model::new(APRIL_MODEL_PATH) {
-        Ok(model) => model,
-        Err(e) => bail!("failed to load april-asr model: {e}"),
+
+    let conf: config::Config = {
+        let reader = File::open("config.yml")?;
+        serde_yaml::from_reader(reader)?
     };
+
+    let model =
+        Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
 
     {
         let (tx, rx) = channel();
         STATE.lock().unwrap().to_ollama.replace(tx);
         std::thread::spawn(|| ollama_handler(rx));
     }
+
+    CONFIG.lock().unwrap().replace(conf);
 
     let (tx, rx) = channel();
     // create an audio stream
@@ -246,6 +285,7 @@ fn main() -> Result<()> {
 
     let stream = maybe_stream.context("failed to build audio input stream")?;
 
+    // TODO: Vendor custom version of this library
     let session = match Session::new(model, example_handler, true, true) {
         Ok(session) => session,
         Err(_) => bail!("failed to create april-asr speech recognition session"),

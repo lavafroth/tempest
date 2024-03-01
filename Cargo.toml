@@ -14,4 +14,5 @@ log = "0.4.20"
 mouse-keyboard-input = "0.4.1"
 reqwest = { version = "0.11.24", default-features = false, features = ["json", "blocking", "rustls"] }
 serde = { version = "1.0.197", features = ["derive"] }
+serde_yaml = "0.9.32"
 simple_logger = "4.3.3"
