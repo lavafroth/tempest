@@ -1,4 +1,3 @@
-use crate::aprilasr::lib::{init_april_api, Model, ResultType, Session, Token};
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
@@ -7,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use tempest::{init_april_api, Model, ResultType, Session, Token};
 
 use std::sync::{Mutex, Once};
 use std::time::Duration;
@@ -15,7 +15,6 @@ use lazy_static::lazy_static;
 use mouse_keyboard_input::key_codes::*;
 use mouse_keyboard_input::VirtualDevice;
 
-mod aprilasr;
 mod config;
 
 #[derive(Default)]

@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.80"
-aprilasr-sys = "0.1.3"
+aprilasr-sys = { path = "src/aprilasr-sys" }
 cpal = "0.15.2"
 lazy_static = "1.4.0"
 log = "0.4.20"

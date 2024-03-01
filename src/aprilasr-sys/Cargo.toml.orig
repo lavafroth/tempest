@@ -1,0 +1,32 @@
+[package]
+name = "aprilasr-sys"
+version = "0.1.3"
+authors = ["VHS <vhsdev@tutanota.com>"]
+edition = "2021"
+links = "aprilasr"
+
+include = [
+    "/src",
+    "COPYING",
+    "*.h",
+    "*.c",
+    "*.pc.in",
+    "*.cmake",
+    "*.cpp",
+    "CMakeLists.txt",
+    "README.md",
+    "build.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+]
+
+description = "Low-level FFI bindings for the april-asr C api (libaprilasr)."
+repository = "https://codeberg.org/vhs/aprilasr-sys"
+keywords = ["nlp", "bindings", "wrapper", "audio", "neuralnetworks"]
+categories = ["external-ffi-bindings", "multimedia", "text-processing"]
+license = "0BSD"
+readme = "README.md"
+
+[build-dependencies]
+bindgen = "0.69.2"
+cmake = "0.1.50"
