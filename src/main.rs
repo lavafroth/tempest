@@ -1,5 +1,5 @@
+use crate::aprilasr::lib::{init_april_api, Model, ResultType, Session, Token};
 use anyhow::{anyhow, bail, Context, Result};
-use aprilasr::{init_april_api, Model, ResultType, Session, Token};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
@@ -15,6 +15,7 @@ use lazy_static::lazy_static;
 use mouse_keyboard_input::key_codes::*;
 use mouse_keyboard_input::VirtualDevice;
 
+mod aprilasr;
 mod config;
 
 #[derive(Default)]
@@ -285,17 +286,15 @@ fn main() -> Result<()> {
 
     let stream = maybe_stream.context("failed to build audio input stream")?;
 
-    // TODO: Vendor custom version of this library
-    let session = match Session::new(model, example_handler, true, true) {
+    // TODO: change the callback to a channel Sender in the vendored library
+    let session = match Session::new(&model, example_handler, true, false) {
         Ok(session) => session,
         Err(_) => bail!("failed to create april-asr speech recognition session"),
     };
     stream.play()?;
 
     for bytes in rx {
-        for pcm16 in bytes {
-            session.feed_pcm16(pcm16.to_le_bytes().to_vec());
-        }
+        session.feed_pcm16(bytes);
     }
     Ok(())
 }
