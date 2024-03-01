@@ -4,7 +4,7 @@ Poor man's linux voice automation.
 
 ### Goals
 - [x] Wake phrase "Tempest rise" and sleep phrase "Tempest rest"
-- [ ] Shortcut customization using config files
+- [x] Shortcut customization using config files
 - [x] Recording built into the binary
 - [x] Sending fuzzy questions to an LLM through Ollama's API
 - [ ] Static builds
@@ -25,12 +25,11 @@ Luckily, if you use NixOS with flakes, you can run `nix develop` in the project 
 
 Once you have installed the necessary tools, clone this repo.
 
-[Download the April model](https://april.sapples.net/aprilv0_en-us.april) and save it as `model.april` in the project directory.
+[Download the April model](https://april.sapples.net/aprilv0_en-us.april) and set the `model_path` in the `config.yml` file to the path of the downloaded model.
 
-This project has the voice commands hardcoded to the keybindings of my workspace.
-You may optionally change the shortcuts in the `voice_command` function.
+You may change the keybindings in the config file in case you are not using GNOME+PaperWM.
 
-Run the following:
+Finally, run the following:
 
 ```sh
 cargo run

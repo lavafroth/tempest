@@ -1,31 +1,21 @@
 use anyhow::{anyhow, bail, Context, Result};
+use config::Binding;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
 
-
 use std::time::Duration;
 
-use mouse_keyboard_input::key_codes::*;
 use mouse_keyboard_input::VirtualDevice;
 
 mod config;
-
-#[derive(Default)]
-pub struct State {
-    position: usize,
-    length: usize,
-    already_commanded: bool,
-    listening: bool,
-    infer: bool,
-    to_ollama: Option<Sender<String>>,
-}
+mod state;
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
@@ -131,38 +121,40 @@ fn command_for_phrase(s: &str, phrase: &[&str], command: &str, args: &[&str]) ->
     check
 }
 
-fn voice_command(vd: &mut VirtualInput, s: &str) -> bool {
-    key_chord_for_phrase(vd, s, &["UP"], &[KEY_LEFTMETA, KEY_DOT])
-        || key_chord_for_phrase(vd, s, &["DOWN"], &[KEY_LEFTMETA, KEY_COMMA])
-        || key_chord_for_phrase(vd, s, &["STACK"], &[KEY_LEFTMETA, KEY_I])
-        || key_chord_for_phrase(vd, s, &["RELEASE"], &[KEY_LEFTMETA, KEY_O])
-        || key_chord_for_phrase(vd, s, &["EXIT"], &[KEY_LEFTMETA, KEY_Q])
-        || key_chord_for_phrase(vd, s, &["CYCLE"], &[KEY_LEFTMETA, KEY_R])
-        || key_chord_for_phrase(vd, s, &["QUICK", "SETTING"], &[KEY_LEFTMETA, KEY_S])
-        || key_chord_for_phrase(vd, s, &["FILL"], &[KEY_LEFTMETA, KEY_F])
-        || command_for_phrase(s, &["CONSOLE"], "blackbox", &[])
-        || command_for_phrase(s, &["BROWSER"], "librewolf", &[])
-        || command_for_phrase(
+fn voice_command(bindings: &[Binding], vd: &mut VirtualInput, s: &str) -> bool {
+    for binding in bindings {
+        if key_chord_for_phrase(
+            vd,
             s,
-            &["SYSTEM", "CONFIG"],
-            "xdg-open",
-            &["/home/h/Public/dotfiles/configuration.nix"],
-        )
-        || command_for_phrase(
-            s,
-            &["SYSTEM", "REBUILD"],
-            "pkexec",
-            &[
-                "doas",
-                "nixos-rebuild",
-                "switch",
-                "--flake",
-                "/home/h/Public/dotfiles#cafe",
-            ],
-        )
+            &binding.phrase.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+            &binding.keys,
+        ) {
+            return true;
+        }
+    }
+    //     || command_for_phrase(s, &["CONSOLE"], "blackbox", &[])
+    //     || command_for_phrase(s, &["BROWSER"], "librewolf", &[])
+    //     || command_for_phrase(
+    //         s,
+    //         &["SYSTEM", "CONFIG"],
+    //         "xdg-open",
+    //         &["/home/h/Public/dotfiles/configuration.nix"],
+    //     )
+    //     || command_for_phrase(
+    //         s,
+    //         &["SYSTEM", "REBUILD"],
+    //         "pkexec",
+    //         &[
+    //             "doas",
+    //             "nixos-rebuild",
+    //             "switch",
+    //             "--flake",
+    //             "/home/h/Public/dotfiles#cafe",
+    //         ],
+    //     )
+    false
 }
 
-/// Main function demonstrating basic usage of the April ASR library.
 fn main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Info)?;
 
@@ -175,19 +167,21 @@ fn main() -> Result<()> {
     // To actually initialize the virtual device
     let device = VirtualDevice::default().expect("failed to create global uinput virtual device");
 
-    let conf: config::Config = {
+    let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
         serde_yaml::from_reader(reader)?
     };
 
-    let mut state = State::default();
+    let conf: config::Config = conf.into();
+
+    let mut state = state::State::default();
 
     let model =
         Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
 
     {
         let (tx, rx) = channel();
-        state.to_ollama.replace(tx);
+        state.ollama_channel(tx);
         std::thread::spawn(|| ollama_handler(rx));
     }
     let (tx, rx) = channel();
@@ -220,14 +214,14 @@ fn main() -> Result<()> {
 
     thread::spawn(move || {
         let mut device = VirtualInput(device);
-        let wake_phrase: Vec<_> = conf.wake_phrase.split_whitespace().collect();
-        let rest_phrase: Vec<_> = conf.rest_phrase.split_whitespace().collect();
+        let wake_phrase = conf.wake_phrase;
+        let rest_phrase = conf.rest_phrase;
         for result_type in session_rx {
             match result_type {
-                ResultType::RecognitionFinal(tokens) => {
-                    let sentence = tokens_to_string(tokens.unwrap());
+                ResultType::RecognitionFinal(Some(tokens)) => {
+                    let sentence = tokens_to_string(tokens);
                     if !state.already_commanded && state.listening {
-                        voice_command(&mut device, &sentence);
+                        voice_command(&conf.bindings, &mut device, &sentence);
                     }
 
                     if state.infer {
@@ -240,25 +234,28 @@ fn main() -> Result<()> {
                                 .expect("failed to send proompt");
                         }
                     }
-                    state.length = 0;
-                    state.position = 0;
-                    state.infer = false;
-                    state.already_commanded = false;
+                    state.clear();
                 }
-                ResultType::RecognitionPartial(tokens) => {
-                    let sentence = tokens_to_string(tokens.unwrap());
+                ResultType::RecognitionPartial(Some(tokens)) => {
+                    let sentence = tokens_to_string(tokens);
                     if let Some(s) = sentence.get(state.position..) {
                         let mode = if state.infer { "INFER" } else { "EAGER" };
                         log::info!("[{mode}]{s}");
-                        state.listening |= subslice_check(&sentence, &wake_phrase);
-                        state.listening &= !subslice_check(&sentence, &rest_phrase);
+                        state.listening |= subslice_check(
+                            &sentence,
+                            &wake_phrase.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+                        );
+                        state.listening &= !subslice_check(
+                            &sentence,
+                            &rest_phrase.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+                        );
                         if !state.infer && state.listening && sentence.len() > state.length {
                             state.position = sentence.rfind(' ').unwrap_or(state.position);
                             if subslice_check(s, &["LISTEN"]) {
                                 state.infer = true;
                                 state.position = sentence.len();
                             }
-                            if voice_command(&mut device, s) {
+                            if voice_command(&conf.bindings, &mut device, s) {
                                 state.already_commanded = true;
                                 state.position = sentence.len();
                             }
@@ -266,7 +263,7 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-                ResultType::CantKeepUp | ResultType::Silence | ResultType::Unknown => {}
+                _ => {}
             }
         }
     });
