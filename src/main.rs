@@ -9,7 +9,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
 
-use std::sync::Mutex;
+
 use std::time::Duration;
 
 use mouse_keyboard_input::key_codes::*;

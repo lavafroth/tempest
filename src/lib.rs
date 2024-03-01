@@ -24,7 +24,7 @@ use aprilasr_sys::ffi as afi;
 use std::ffi::{c_char, c_float, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::Sender;
-use std::{default, fmt, process, slice};
+use std::{fmt, process, slice};
 
 /// Exposes the April API version as defined by the FFI cast to `i32`.
 pub static APRIL_VERSION: i32 = afi::APRIL_VERSION as c_int;
@@ -246,9 +246,9 @@ impl From<afi::AprilSpeakerID> for SpeakerID {
 ///
 /// This `Into` implementation allows seamless conversion of a Rust-friendly `SpeakerID` into the corresponding
 /// low-level FFI representation used by `afi::AprilSpeakerID`.
-impl Into<afi::AprilSpeakerID> for SpeakerID {
-    fn into(self) -> afi::AprilSpeakerID {
-        afi::AprilSpeakerID { data: self.data }
+impl From<SpeakerID> for afi::AprilSpeakerID {
+    fn from(val: SpeakerID) -> Self {
+        afi::AprilSpeakerID { data: val.data }
     }
 }
 
@@ -479,7 +479,7 @@ impl From<afi::AprilConfigFlagBits> for ConfigFlagBits {
 ///
 /// This `Into` implementation enables seamless conversion from the Rust-friendly `ConfigFlagBits` enum
 /// to its corresponding low-level FFI representation used by `afi::AprilConfigFlagBits`.
-impl Into<afi::AprilConfigFlagBits> for ConfigFlagBits {
+impl From<ConfigFlagBits> for afi::AprilConfigFlagBits {
     /// Converts a `ConfigFlagBits` enum into its low-level FFI representation (`afi::AprilConfigFlagBits`).
     ///
     /// # Arguments
@@ -489,8 +489,8 @@ impl Into<afi::AprilConfigFlagBits> for ConfigFlagBits {
     /// # Returns
     ///
     /// The low-level FFI representation of `ConfigFlagBits` as `afi::AprilConfigFlagBits`.
-    fn into(self) -> afi::AprilConfigFlagBits {
-        self as afi::AprilConfigFlagBits
+    fn from(val: ConfigFlagBits) -> Self {
+        val as afi::AprilConfigFlagBits
     }
 }
 
@@ -636,18 +636,18 @@ impl From<afi::AprilConfig> for Config {
 /// Conversion from the Rust-friendly `Config` to the low-level FFI representation (`afi::AprilConfig`).
 ///
 /// This implementation enables the creation of a `afi::AprilConfig` instance based on the Rust-friendly `Config`.
-impl Into<afi::AprilConfig> for Config {
+impl From<Config> for afi::AprilConfig {
     /// Converts a `Config` into a `afi::AprilConfig` instance.
     ///
     /// # Arguments
     ///
     /// * `config` - The Rust-friendly `Config` to be converted into low-level FFI representation.
-    fn into(self) -> afi::AprilConfig {
+    fn from(val: Config) -> Self {
         // Convert Rust types into the corresponding FFI representation
-        let speaker = self.speaker.into();
-        let handler = self.handler;
-        let userdata = self.userdata;
-        let flags = self.flags.into();
+        let speaker = val.speaker.into();
+        let handler = val.handler;
+        let userdata = val.userdata;
+        let flags = val.flags.into();
 
         // Create a new afi::AprilConfig instance
         afi::AprilConfig {
@@ -869,7 +869,7 @@ impl<'a> Session<'a> {
         } else {
             Ok(Session {
                 ctx: session,
-                _model: model.into(),
+                _model: model,
             })
         }
     }
