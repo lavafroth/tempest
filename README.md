@@ -21,7 +21,7 @@ Prerequisites:
 - ONNX Runtime
 - Audio library for your OS (`alsa-dev`, `alsa-lib` or `alsa` for linux)
 
-Luckily, if you use NixOS, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
+Luckily, if you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
 
 Once you have installed the necessary tools, clone this repo.
 
@@ -35,3 +35,10 @@ Run the following:
 ```sh
 cargo run
 ```
+
+### Acknowledgements
+
+A huge thank you to these folks in helping me build this tool:
+
+- [Josh Habdas](https://cpdeberg.org/vhs) for creating the original C FFI using bindgen
+- [abb128](https://github.com/abb128) for the C implementation of [April ASR](https://github.com/abb128/april-asr).
