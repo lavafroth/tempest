@@ -7,6 +7,7 @@ pub struct RawConfig {
     pub wake_phrase: String,
     pub rest_phrase: String,
     pub bindings: Vec<RawBinding>,
+    pub ollama_model: String,
 }
 
 #[derive(Deserialize)]
@@ -20,6 +21,7 @@ pub struct Config {
     pub wake_phrase: Vec<String>,
     pub rest_phrase: Vec<String>,
     pub bindings: Vec<Binding>,
+    pub ollama_model: String,
 }
 
 pub struct Binding {
@@ -323,6 +325,7 @@ impl From<RawConfig> for Config {
             wake_phrase,
             rest_phrase,
             bindings,
+            ollama_model: value.ollama_model,
         }
     }
 }

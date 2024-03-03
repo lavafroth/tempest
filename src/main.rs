@@ -3,79 +3,21 @@ use config::Binding;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
-use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::channel;
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
-
-use std::time::Duration;
 
 use mouse_keyboard_input::VirtualDevice;
 
 mod config;
+mod llm;
 mod state;
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
     tokens_str.join("")
-}
-
-#[derive(Serialize)]
-pub struct LLMRequest {
-    model: String,
-    messages: Vec<LLMMessage>,
-    stream: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LLMMessage {
-    role: String,
-    content: String,
-}
-#[derive(Deserialize)]
-pub struct LLMResponse {
-    message: LLMMessage,
-}
-
-fn ollama_handler(recv: Receiver<String>) {
-    for prompt in recv {
-        log::info!("sending to ollama: {}", prompt);
-        let client = reqwest::blocking::ClientBuilder::new()
-            .timeout(Duration::from_secs(600))
-            .build()
-            .unwrap();
-        let resp = client
-            .post("http://localhost:11434/api/chat")
-            .json(&LLMRequest {
-                model: "mistral".to_string(),
-                messages: vec![LLMMessage {
-                    role: "user".to_string(),
-                    content: prompt.to_string(),
-                }],
-                stream: false,
-            })
-            .send();
-
-        let resp = match resp {
-            Ok(resp) => resp,
-            Err(e) => {
-                log::error!("failed to send fuzzy language request to ollama: {e}");
-                return;
-            }
-        };
-
-        let message = match resp.json() {
-            Ok(LLMResponse { message }) => message,
-            Err(e) => {
-                log::error!("failed to parse JSON response from ollama: {e}");
-                return;
-            }
-        };
-
-        log::info!("response from ollama: {}", message.content);
-    }
 }
 
 pub struct VirtualInput(VirtualDevice);
@@ -183,8 +125,9 @@ fn main() -> Result<()> {
     {
         let (tx, rx) = channel();
         state.ollama_channel(tx);
-        std::thread::spawn(|| ollama_handler(rx));
+        std::thread::spawn(|| llm::handler(conf.ollama_model, rx));
     }
+
     let (tx, rx) = channel();
     // create an audio stream
     let maybe_stream = audio_device.build_input_stream(

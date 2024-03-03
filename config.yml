@@ -1,4 +1,5 @@
 model_path: model.april
+ollama_model: mistral
 wake_phrase: tempest rise
 rest_phrase: tempest rest
 
