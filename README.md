@@ -11,8 +11,6 @@ Poor man's linux voice automation.
 
 ### Getting started
 
-This project was created for fulfilling a personal need and therefore has some opinionated settings (for now).
-
 Prerequisites:
 - Rust toolchain, either via your package manager or [rustup](https://rustup.rs)
 - `clang`
@@ -22,6 +20,8 @@ Prerequisites:
 - Audio library for your OS (`alsa-dev`, `alsa-lib` or `alsa` for linux)
 
 Luckily, if you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
+
+Note: You might have to add your user to the `uinput` group.
 
 Once you have installed the necessary tools, clone this repo.
 
