@@ -129,13 +129,13 @@ struct OnlineFBank_i {
 OnlineFBank make_fbank(FBankOptions opts) {
     assert(opts.snip_edges); // not sure how to implement non-snip-edges at this time
 
-    OnlineFBank fbank = (OnlineFBank)calloc(1, sizeof(struct OnlineFBank_i));
+    OnlineFBank fbank = (OnlineFBank)malloc(sizeof(struct OnlineFBank_i));
     fbank->opts = opts;
 
     fbank->window_shift = opts.frame_shift_ms * opts.sample_freq / 1000;
     fbank->window_size = opts.frame_length_ms * opts.sample_freq / 1000;
     fbank->padded_window_size = opts.round_pow2 ? round_up_to_nearest_power_of_two(fbank->window_size) : fbank->window_size;
-    fbank->num_fft_bins = fbank->padded_window_size / 2;
+    fbank->num_fft_bins = fbank->padded_window_size >> 2;
 
     fbank->window = (float*)calloc(fbank->padded_window_size, sizeof(float));
     generate_povey_window(fbank->window, fbank->padded_window_size);
@@ -172,8 +172,8 @@ OnlineFBank make_fbank(FBankOptions opts) {
 
 const float ZEROS[32768] = { 0 };
 void fbank_accept_waveform(OnlineFBank fbank, float *wave, size_t wave_count) {
-    if(wave == NULL) wave = ZEROS;
-    else if(fbank->sonic_stream != NULL) {
+    if(!wave) wave = ZEROS;
+    else if(fbank->sonic_stream) {
         sonicSetSpeed(fbank->sonic_stream, (float)fbank->speed_factor);
         sonicWriteFloatToStream(fbank->sonic_stream, wave, wave_count);
 

@@ -145,12 +145,6 @@ set_target_properties(aprilasr PROPERTIES VERSION ${CMAKE_PROJECT_VERSION}
 SOVERSION ${PROJECT_VERSION_MAJOR} )
 set_target_properties(aprilasr PROPERTIES PUBLIC_HEADER "${april_headers}")
 
-add_executable(main example.cpp)
-target_link_libraries(main PRIVATE aprilasr_static ${april_link_libraries})
-
-add_executable(srt example_srt.cpp)
-target_link_libraries(srt PRIVATE aprilasr_static ${april_link_libraries})
-
 install(TARGETS aprilasr
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME})
