@@ -96,6 +96,7 @@ impl VirtualInput {
 }
 
 fn subslice_check(s: &str, phrase: &[&str]) -> bool {
+    let phrase: Vec<String> = phrase.iter().map(|word| word.to_uppercase()).collect();
     s.split_whitespace()
         .collect::<Vec<_>>()
         .windows(phrase.len())

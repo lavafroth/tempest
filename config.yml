@@ -1,21 +1,21 @@
 model_path: model.april
-wake_phrase: "TEMPEST RISE"
-rest_phrase: "TEMPEST REST"
+wake_phrase: tempest rise
+rest_phrase: tempest rest
 
 bindings:
   - phrase: UP
-    keys: [SUPER, DOT]
+    keys: [super, dot]
   - phrase: DOWN
-    keys: [SUPER, COMMA]
+    keys: [super, comma]
   - phrase: STACK
-    keys: [SUPER, I]
+    keys: [super, i]
   - phrase: RELEASE
-    keys: [SUPER, O]
+    keys: [super, o]
   - phrase: EXIT
-    keys: [SUPER, Q]
+    keys: [super, q]
   - phrase: CYCLE
-    keys: [SUPER, R]
+    keys: [super, r]
   - phrase: FILL
-    keys: [SUPER, F]
+    keys: [super, f]
   - phrase: QUICK SETTINGS
-    keys: [SUPER, S]
+    keys: [super, s]

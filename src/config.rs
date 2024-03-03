@@ -31,7 +31,7 @@ fn decode_key<S>(key: S) -> u16
 where
     S: AsRef<str>,
 {
-    match key.as_ref() {
+    match key.as_ref().to_uppercase().as_str() {
         "ESC" => KEY_ESC,
         "1" => KEY_1,
         "2" => KEY_2,
