@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
 use std::fs::File;
-use std::process::Command;
+// use std::process::Command;
 use std::sync::mpsc::channel;
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
@@ -26,52 +26,41 @@ impl VirtualInput {
     fn key_chord(&mut self, keys: &[u16]) {
         for &key in keys {
             if let Err(e) = self.0.press(key) {
-                log::error!("failed to press key {key}: {e}");
+                error!("failed to press key {key}: {e}");
             }
         }
         for &key in keys.iter().rev() {
             if let Err(e) = self.0.release(key) {
-                log::error!("failed to release key {key}: {e}");
+                error!("failed to release key {key}: {e}");
             }
         }
     }
 }
 
-fn subslice_check(s: &str, phrase: &[&str]) -> bool {
-    let phrase: Vec<String> = phrase.iter().map(|word| word.to_uppercase()).collect();
+fn subslice_check<S>(s: &str, phrase: &[S]) -> bool
+where
+    S: AsRef<str>,
+{
+    let phrase: Vec<String> = phrase
+        .iter()
+        .map(|word| word.as_ref().to_uppercase())
+        .collect();
     s.split_whitespace()
         .collect::<Vec<_>>()
         .windows(phrase.len())
         .any(|window| window == phrase)
 }
 
-fn key_chord_for_phrase(vd: &mut VirtualInput, s: &str, phrase: &[&str], keys: &[u16]) -> bool {
-    if subslice_check(s, phrase) {
-        vd.key_chord(keys);
-        true
-    } else {
-        false
-    }
-}
-
-fn command_for_phrase(s: &str, phrase: &[&str], command: &str, args: &[&str]) -> bool {
-    let check = subslice_check(s, phrase);
-    if check {
-        if let Err(e) = Command::new(command).args(args).spawn() {
-            error!("failed to run command `{}`: {}", command, e);
-        }
-    };
-    check
-}
+// fn command_for_phrase(s: &str, phrase: &[&str], command: &str, args: &[&str]) {
+//         if let Err(e) = Command::new(command).args(args).spawn() {
+//             error!("failed to run command `{}`: {}", command, e);
+//         }
+// }
 
 fn voice_command(bindings: &[Binding], vd: &mut VirtualInput, s: &str) -> bool {
     for binding in bindings {
-        if key_chord_for_phrase(
-            vd,
-            s,
-            &binding.phrase.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
-            &binding.keys,
-        ) {
+        if subslice_check(s, &binding.phrase) {
+            vd.key_chord(&binding.keys);
             return true;
         }
     }
@@ -107,8 +96,8 @@ fn main() -> Result<()> {
 
     init_april_api(1); // Initialize April ASR. Required to load a Model.
 
-    // To actually initialize the virtual device
-    let device = VirtualDevice::default().expect("failed to create global uinput virtual device");
+    let device = VirtualDevice::default()
+        .map_err(|e| anyhow!("failed to create global uinput virtual device: {e}"))?;
 
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
@@ -151,10 +140,8 @@ fn main() -> Result<()> {
     let (session_tx, session_rx) = channel();
 
     // TODO: change the callback to a channel Sender in the vendored library
-    let session = match Session::new(&model, session_tx, true, false) {
-        Ok(session) => session,
-        Err(_) => bail!("failed to create april-asr speech recognition session"),
-    };
+    let session = Session::new(&model, session_tx, true, false)
+        .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
     thread::spawn(move || {
         let mut device = VirtualInput(device);
@@ -185,14 +172,8 @@ fn main() -> Result<()> {
                     if let Some(s) = sentence.get(state.position..) {
                         let mode = if state.infer { "INFER" } else { "EAGER" };
                         log::info!("[{mode}]{s}");
-                        state.listening |= subslice_check(
-                            &sentence,
-                            &wake_phrase.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
-                        );
-                        state.listening &= !subslice_check(
-                            &sentence,
-                            &rest_phrase.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
-                        );
+                        state.listening |= subslice_check(&sentence, &wake_phrase);
+                        state.listening &= !subslice_check(&sentence, &rest_phrase);
                         if !state.infer && state.listening && sentence.len() > state.length {
                             state.position = sentence.rfind(' ').unwrap_or(state.position);
                             if subslice_check(s, &["LISTEN"]) {
