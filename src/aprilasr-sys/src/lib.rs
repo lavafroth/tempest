@@ -8,6 +8,16 @@ pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+#[no_mangle]
+pub extern "C" fn inv_mel_scale(mel_freq: f64) -> f64 {
+    700.0 * ((mel_freq / 1127.0).exp() - 1.0)
+}
+
+#[no_mangle]
+pub extern "C" fn mel_scale(freq: f64) -> f64 {
+    1127.0 * (1.0 + freq / 700.0).ln()
+}
+
 #[cfg(test)]
 mod tests {
 

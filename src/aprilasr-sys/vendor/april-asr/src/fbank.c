@@ -54,13 +54,8 @@ void generate_povey_window(float *out, int N) {
     }
 }
 
-double inverse_mel_scale(double mel_freq) {
-    return 700.0 * (exp(mel_freq / 1127.0) - 1.0);
-}
-
-double mel_scale(double freq) {
-    return 1127.0 * log(1.0 + freq / 700.0);
-}
+extern double inv_mel_scale(double mel_freq);
+extern double mel_scale(double freq);
 
 void generate_banks(float *bins_mat, int num_bins, int num_fft_bins, int padded_window_size, int sample_freq, int mel_low_freq, int mel_high_freq){
     if(mel_high_freq == 0) mel_high_freq = sample_freq / 2;
