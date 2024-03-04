@@ -24,13 +24,6 @@ fn main() {
         println!("cargo:include={}", include_dir);
     }
 
-    // Clone vendored submodule if needed.
-    if !Path::new("vendor/april-asr").exists() {
-        let _ = Command::new("git")
-            .args(&["submodule", "update", "--init", "vendor/april-asr"])
-            .status();
-    }
-
     // Only re-build April ASR if the API changes.
     println!("cargo:rerun-if-changed=vendor/april-asr/april_api.h");
     println!("cargo:rerun-if-changed=wrapper.h");
