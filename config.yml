@@ -3,7 +3,7 @@ ollama_model: mistral
 wake_phrase: tempest rise
 rest_phrase: tempest rest
 
-bindings:
+actions:
   - phrase: UP
     keys: [super, dot]
   - phrase: DOWN
@@ -20,3 +20,13 @@ bindings:
     keys: [super, f]
   - phrase: QUICK SETTINGS
     keys: [super, s]
+  - phrase: escape
+    keys: [esc]
+  - phrase: browser
+    command: [librewolf]
+  - phrase: console
+    command: [blackbox]
+  - phrase: system config
+    command: [xdg-open, "/home/h/Public/dotfiles/hosts/default/configuration.nix"]
+  - phrase: system rebuild
+    command: [pkexec, nixos-rebuild, switch, "--flake", "/home/h/Public/dotfiles#cafe"]

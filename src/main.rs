@@ -1,10 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
-use config::Binding;
+use config::{Action, Binding};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
 use std::fs::File;
-// use std::process::Command;
+use std::process::Command;
 use std::sync::mpsc::channel;
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
@@ -51,39 +51,28 @@ where
         .any(|window| window == phrase)
 }
 
-// fn command_for_phrase(s: &str, phrase: &[&str], command: &str, args: &[&str]) {
-//         if let Err(e) = Command::new(command).args(args).spawn() {
-//             error!("failed to run command `{}`: {}", command, e);
-//         }
-// }
-
 fn voice_command(bindings: &[Binding], vd: &mut VirtualInput, s: &str) -> bool {
     for binding in bindings {
         if subslice_check(s, &binding.phrase) {
-            vd.key_chord(&binding.keys);
+            match &binding.action {
+                Action::Keys(keys) => vd.key_chord(&keys),
+                Action::Command(command) => {
+                    if command.len() == 0 {
+                        continue;
+                    }
+                    let args = if command.len() > 1 {
+                        &command[1..]
+                    } else {
+                        &[]
+                    };
+                    if let Err(e) = Command::new(command.get(0).unwrap()).args(args).spawn() {
+                        error!("failed to run command `{}`: {}", command[0], e);
+                    }
+                }
+            }
             return true;
         }
     }
-    //     || command_for_phrase(s, &["CONSOLE"], "blackbox", &[])
-    //     || command_for_phrase(s, &["BROWSER"], "librewolf", &[])
-    //     || command_for_phrase(
-    //         s,
-    //         &["SYSTEM", "CONFIG"],
-    //         "xdg-open",
-    //         &["/home/h/Public/dotfiles/configuration.nix"],
-    //     )
-    //     || command_for_phrase(
-    //         s,
-    //         &["SYSTEM", "REBUILD"],
-    //         "pkexec",
-    //         &[
-    //             "doas",
-    //             "nixos-rebuild",
-    //             "switch",
-    //             "--flake",
-    //             "/home/h/Public/dotfiles#cafe",
-    //         ],
-    //     )
     false
 }
 
@@ -140,7 +129,7 @@ fn main() -> Result<()> {
     let (session_tx, session_rx) = channel();
 
     // TODO: change the callback to a channel Sender in the vendored library
-    let session = Session::new(&model, session_tx, true, false)
+    let session = Session::new(&model, session_tx, false, false)
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
     thread::spawn(move || {
@@ -152,7 +141,7 @@ fn main() -> Result<()> {
                 ResultType::RecognitionFinal(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
                     if !state.already_commanded && state.listening {
-                        voice_command(&conf.bindings, &mut device, &sentence);
+                        voice_command(&conf.actions, &mut device, &sentence);
                     }
 
                     if state.infer {
@@ -180,7 +169,7 @@ fn main() -> Result<()> {
                                 state.infer = true;
                                 state.position = sentence.len();
                             }
-                            if voice_command(&conf.bindings, &mut device, s) {
+                            if voice_command(&conf.actions, &mut device, s) {
                                 state.already_commanded = true;
                                 state.position = sentence.len();
                             }

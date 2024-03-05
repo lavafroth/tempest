@@ -6,27 +6,67 @@ pub struct RawConfig {
     pub model_path: String,
     pub wake_phrase: String,
     pub rest_phrase: String,
-    pub bindings: Vec<RawBinding>,
+    pub actions: Vec<RawBinding>,
     pub ollama_model: String,
+}
+
+#[derive(Deserialize)]
+pub enum Action {
+    Keys(Vec<u16>),
+    Command(Vec<String>),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawAction {
+    Keys(Vec<String>),
+    Command(Vec<String>),
+}
+
+impl From<RawAction> for Action {
+    fn from(value: RawAction) -> Self {
+        match value {
+            RawAction::Keys(v) => {
+                let v = v.into_iter().map(decode_key).collect();
+                Self::Keys(v)
+            }
+            RawAction::Command(v) => Self::Command(v),
+        }
+    }
+}
+
+impl From<RawBinding> for Binding {
+    fn from(value: RawBinding) -> Self {
+        Self {
+            phrase: value
+                .phrase
+                .split_whitespace()
+                .map(ToString::to_string)
+                .collect(),
+            action: value.action.into(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
 pub struct RawBinding {
     phrase: String,
-    keys: Vec<String>,
+
+    #[serde(flatten)]
+    action: RawAction,
 }
 
 pub struct Config {
     pub model_path: String,
     pub wake_phrase: Vec<String>,
     pub rest_phrase: Vec<String>,
-    pub bindings: Vec<Binding>,
+    pub actions: Vec<Binding>,
     pub ollama_model: String,
 }
 
 pub struct Binding {
     pub phrase: Vec<String>,
-    pub keys: Vec<u16>,
+    pub action: Action,
 }
 
 fn decode_key<S>(key: S) -> u16
@@ -312,19 +352,12 @@ impl From<RawConfig> for Config {
             .split_whitespace()
             .map(|s| s.to_owned())
             .collect();
-        let bindings = value
-            .bindings
-            .iter()
-            .map(|b| Binding {
-                phrase: b.phrase.split_whitespace().map(|s| s.to_owned()).collect(),
-                keys: b.keys.iter().map(decode_key).collect::<Vec<_>>(),
-            })
-            .collect();
+        let actions = value.actions.into_iter().map(|b| b.into()).collect();
         Self {
             model_path: value.model_path,
             wake_phrase,
             rest_phrase,
-            bindings,
+            actions,
             ollama_model: value.ollama_model,
         }
     }
