@@ -1,9 +1,5 @@
 use cmake;
-use std::{
-    env,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{env, path::PathBuf};
 
 /// Use p! to debug as println! is reserved in build files.
 #[allow(unused_macros)]
