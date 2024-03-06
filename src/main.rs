@@ -175,9 +175,14 @@ fn main() -> Result<()> {
                         let listening_indicator = if state.listening { "" } else { "not " };
                         log::info!("[{}] [{}listening] {}", mode, listening_indicator, s);
 
-                        state.listening |= subslice_check(&sentence, &wake_phrase);
-                        state.listening &= !subslice_check(&sentence, &rest_phrase);
-
+                        if state.listening {
+                            state.listening = !subslice_check(&sentence, &rest_phrase);
+                            state.already_commanded = true;
+                        } else {
+                            state.listening = subslice_check(&sentence, &wake_phrase);
+                            state.already_commanded = true;
+                            continue;
+                        }
                         if !state.infer && state.listening && sentence.len() > state.length {
                             state.position = sentence.rfind(' ').unwrap_or(state.position);
                             if subslice_check(s, "LISTEN") {
