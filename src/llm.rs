@@ -18,41 +18,49 @@ pub struct Response {
     message: Message,
 }
 
-pub fn handler(model: String, recv: Receiver<String>) {
-    for prompt in recv {
-        log::info!("sending to ollama: {}", prompt);
-        let client = reqwest::blocking::ClientBuilder::new()
-            .timeout(Duration::from_secs(600))
-            .build()
-            .unwrap();
-        let resp = client
-            .post("http://localhost:11434/api/chat")
-            .json(&Request {
-                model: model.clone(),
-                messages: vec![Message {
-                    role: "user".to_string(),
-                    content: prompt.to_string(),
-                }],
-                stream: false,
-            })
-            .send();
+pub struct Client {
+    pub model: String,
+    pub endpoint: String,
+    pub receiver: Receiver<String>,
+}
 
-        let resp = match resp {
-            Ok(resp) => resp,
-            Err(e) => {
-                log::error!("failed to send fuzzy language request to ollama: {e}");
-                return;
-            }
-        };
+impl Client {
+    pub fn handler(&self) {
+        for prompt in self.receiver.iter() {
+            log::info!("sending to ollama: {}", prompt);
+            let client = reqwest::blocking::ClientBuilder::new()
+                .timeout(Duration::from_secs(600))
+                .build()
+                .unwrap();
+            let resp = client
+                .post(&self.endpoint)
+                .json(&Request {
+                    model: self.model.clone(),
+                    messages: vec![Message {
+                        role: "user".to_string(),
+                        content: prompt.to_string(),
+                    }],
+                    stream: false,
+                })
+                .send();
 
-        let message = match resp.json() {
-            Ok(Response { message }) => message,
-            Err(e) => {
-                log::error!("failed to parse JSON response from ollama: {e}");
-                return;
-            }
-        };
+            let resp = match resp {
+                Ok(resp) => resp,
+                Err(e) => {
+                    log::error!("failed to send fuzzy language request to ollama: {e}");
+                    return;
+                }
+            };
 
-        log::info!("response from ollama: {}", message.content);
+            let message = match resp.json() {
+                Ok(Response { message }) => message,
+                Err(e) => {
+                    log::error!("failed to parse JSON response from ollama: {e}");
+                    return;
+                }
+            };
+
+            log::info!("response from ollama: {}", message.content);
+        }
     }
 }

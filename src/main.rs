@@ -103,7 +103,12 @@ fn main() -> Result<()> {
     {
         let (tx, rx) = channel();
         state.ollama_channel(tx);
-        std::thread::spawn(|| llm::handler(conf.ollama_model, rx));
+        let ollama = llm::Client {
+            model: conf.ollama_model,
+            endpoint: conf.ollama_endpoint,
+            receiver: rx,
+        };
+        std::thread::spawn(move || ollama.handler());
     }
 
     let (tx, rx) = channel();

@@ -8,6 +8,7 @@ pub struct RawConfig {
     pub rest_phrase: String,
     pub actions: Vec<RawBinding>,
     pub ollama_model: String,
+    pub ollama_endpoint: String,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +63,7 @@ pub struct Config {
     pub rest_phrase: Vec<String>,
     pub actions: Vec<Binding>,
     pub ollama_model: String,
+    pub ollama_endpoint: String,
 }
 
 pub struct Binding {
@@ -359,6 +361,7 @@ impl From<RawConfig> for Config {
             rest_phrase,
             actions,
             ollama_model: value.ollama_model,
+            ollama_endpoint: value.ollama_endpoint,
         }
     }
 }
