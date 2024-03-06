@@ -39,11 +39,7 @@ impl From<RawAction> for Action {
 impl From<RawBinding> for Binding {
     fn from(value: RawBinding) -> Self {
         Self {
-            phrase: value
-                .phrase
-                .split_whitespace()
-                .map(ToString::to_string)
-                .collect(),
+            phrase: value.phrase,
             action: value.action.into(),
         }
     }
@@ -59,15 +55,15 @@ pub struct RawBinding {
 
 pub struct Config {
     pub model_path: String,
-    pub wake_phrase: Vec<String>,
-    pub rest_phrase: Vec<String>,
+    pub wake_phrase: String,
+    pub rest_phrase: String,
     pub actions: Vec<Binding>,
     pub ollama_model: String,
     pub ollama_endpoint: String,
 }
 
 pub struct Binding {
-    pub phrase: Vec<String>,
+    pub phrase: String,
     pub action: Action,
 }
 
@@ -344,16 +340,8 @@ where
 
 impl From<RawConfig> for Config {
     fn from(value: RawConfig) -> Self {
-        let wake_phrase = value
-            .wake_phrase
-            .split_whitespace()
-            .map(|s| s.to_owned())
-            .collect();
-        let rest_phrase = value
-            .rest_phrase
-            .split_whitespace()
-            .map(|s| s.to_owned())
-            .collect();
+        let wake_phrase = value.wake_phrase;
+        let rest_phrase = value.rest_phrase;
         let actions = value.actions.into_iter().map(|b| b.into()).collect();
         Self {
             model_path: value.model_path,

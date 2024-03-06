@@ -37,18 +37,24 @@ impl VirtualInput {
     }
 }
 
-fn subslice_check<S>(s: &str, phrase: &[S]) -> bool
-where
-    S: AsRef<str>,
-{
-    let phrase: Vec<String> = phrase
-        .iter()
-        .map(|word| word.as_ref().to_uppercase())
-        .collect();
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .windows(phrase.len())
-        .any(|window| window == phrase)
+fn subslice_check(s: &str, phrase: &str) -> bool {
+    // This does not allocate
+    if s.eq_ignore_ascii_case(phrase) {
+        return true;
+    }
+    let s = s.to_lowercase();
+    let phrase = phrase.to_lowercase();
+    if let Some(index) = s.find(&phrase) {
+        let mut chars = s.chars();
+        let before = chars.nth(index.saturating_sub(1));
+        let after = chars.nth(index.saturating_add(phrase.len() + 1));
+        match (before, after) {
+            (Some(' ') | None, Some(' ') | None) => true,
+            _ => false,
+        }
+    } else {
+        false
+    }
 }
 
 fn voice_command(bindings: &[Binding], vd: &mut VirtualInput, s: &str) -> bool {
@@ -163,14 +169,18 @@ fn main() -> Result<()> {
                 }
                 ResultType::RecognitionPartial(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
-                    if let Some(s) = sentence.get(state.position..) {
-                        let mode = if state.infer { "INFER" } else { "EAGER" };
-                        log::info!("[{mode}]{s}");
+                    if let Some(s) = sentence.get(state.position + 1..) {
+                        // a bunch of indicators for sanity check
+                        let mode = if state.infer { "infer" } else { "eager" };
+                        let listening_indicator = if state.listening { "" } else { "not " };
+                        log::info!("[{}] [{}listening] {}", mode, listening_indicator, s);
+
                         state.listening |= subslice_check(&sentence, &wake_phrase);
                         state.listening &= !subslice_check(&sentence, &rest_phrase);
+
                         if !state.infer && state.listening && sentence.len() > state.length {
                             state.position = sentence.rfind(' ').unwrap_or(state.position);
-                            if subslice_check(s, &["LISTEN"]) {
+                            if subslice_check(s, "LISTEN") {
                                 state.infer = true;
                                 state.position = sentence.len();
                             }
