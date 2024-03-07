@@ -1,13 +1,15 @@
 use anyhow::{anyhow, bail, Context, Result};
-use config::{Action, Binding};
+use config::Action;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::process::Command;
 use std::sync::mpsc::channel;
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
+use trie_rs::Trie;
 
 use mouse_keyboard_input::VirtualDevice;
 
@@ -57,29 +59,64 @@ fn subslice_check(s: &str, phrase: &str) -> bool {
     }
 }
 
-fn voice_command(bindings: &[Binding], vd: &mut VirtualInput, s: &str) -> bool {
-    for binding in bindings {
-        if subslice_check(s, &binding.phrase) {
-            match &binding.action {
-                Action::Keys(keys) => vd.key_chord(&keys),
-                Action::Command(command) => {
-                    if command.len() == 0 {
-                        continue;
-                    }
-                    let args = if command.len() > 1 {
-                        &command[1..]
-                    } else {
-                        &[]
-                    };
-                    if let Err(e) = Command::new(command.get(0).unwrap()).args(args).spawn() {
-                        error!("failed to run command `{}`: {}", command[0], e);
-                    }
+pub struct TrieMatchBookkeeper {
+    pub matched: String,
+    pub trie: Trie<u8>,
+    pub actions: BTreeMap<String, Action>,
+    pub current_action: Option<Action>,
+}
+
+impl TrieMatchBookkeeper {
+    fn word_appears_in_phrases(&mut self, phrase: &str, vd: &mut VirtualInput) -> usize {
+        let chars = phrase.chars();
+        for c in chars {
+            if self.matched.is_empty() && self.trie.predictive_search(c.to_string()).len() > 0 {
+                self.matched.push(c);
+            } else if !self.matched.is_empty() {
+                let mut new_search = self.matched.clone();
+                new_search.push(c);
+                if self.trie.predictive_search(&new_search).len() > 0 {
+                    // self.internal_matched_crib.replace(new_search);
+                    self.matched = new_search;
+                } else {
+                    self.matched.clear();
                 }
             }
-            return true;
+
+            if !self.matched.is_empty() && self.trie.predictive_search(&self.matched).len() == 1 {
+                self.current_action = self.actions.get(&self.matched).cloned();
+                self.do_action(vd);
+            }
+            log::info!("matched {:?}, char: {:?}", self.matched, c);
+        }
+
+        self.matched.len()
+    }
+    fn clear(&mut self) {
+        self.current_action = None;
+        self.matched.clear();
+    }
+    fn do_action(&self, vd: &mut VirtualInput) {
+        if self.current_action.is_none() {
+            return;
+        }
+        match self.current_action.clone().unwrap() {
+            Action::Keys(keys) => vd.key_chord(&keys),
+            Action::Command(command) => {
+                if command.len() == 0 {
+                    return;
+                }
+                let args = if command.len() > 1 {
+                    &command[1..]
+                } else {
+                    &[]
+                };
+                if let Err(e) = Command::new(command.get(0).unwrap()).args(args).spawn() {
+                    error!("failed to run command `{}`: {}", command[0], e);
+                }
+            }
         }
     }
-    false
 }
 
 fn main() -> Result<()> {
@@ -143,6 +180,13 @@ fn main() -> Result<()> {
     let session = Session::new(&model, session_tx, false, false)
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
+    let mut bookkeeper = TrieMatchBookkeeper {
+        matched: String::new(),
+        trie: conf.word_trie,
+        actions: conf.actions,
+        current_action: None,
+    };
+
     thread::spawn(move || {
         let mut device = VirtualInput(device);
         let wake_phrase = conf.wake_phrase;
@@ -152,7 +196,8 @@ fn main() -> Result<()> {
                 ResultType::RecognitionFinal(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
                     if !state.already_commanded && state.listening {
-                        voice_command(&conf.actions, &mut device, &sentence);
+                        bookkeeper.word_appears_in_phrases(&sentence, &mut device);
+                        bookkeeper.do_action(&mut device);
                     }
 
                     if state.infer {
@@ -166,10 +211,11 @@ fn main() -> Result<()> {
                         }
                     }
                     state.clear();
+                    bookkeeper.clear();
                 }
                 ResultType::RecognitionPartial(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
-                    if let Some(s) = sentence.get(state.position + 1..) {
+                    if let Some(s) = sentence.get(state.position..) {
                         // a bunch of indicators for sanity check
                         let mode = if state.infer { "infer" } else { "eager" };
                         let listening_indicator = if state.listening { "" } else { "not " };
@@ -189,7 +235,8 @@ fn main() -> Result<()> {
                                 state.infer = true;
                                 state.position = sentence.len();
                             }
-                            if voice_command(&conf.actions, &mut device, s) {
+                            let position = bookkeeper.word_appears_in_phrases(s, &mut device);
+                            if position > 0 {
                                 state.already_commanded = true;
                                 state.position = sentence.len();
                             }
