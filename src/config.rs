@@ -339,7 +339,7 @@ impl From<RawConfig> for Config {
         let actions = value
             .actions
             .into_iter()
-            .map(|b| (b.phrase, b.action.into()))
+            .map(|b| (b.phrase.to_uppercase(), b.action.into()))
             .collect();
         Self {
             model_path: value.model_path,

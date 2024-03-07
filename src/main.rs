@@ -80,6 +80,7 @@ impl TrieMatchBookkeeper {
                     self.matched = new_search;
                 } else {
                     self.matched.clear();
+                    self.matched.push(c);
                 }
             }
 
@@ -87,7 +88,7 @@ impl TrieMatchBookkeeper {
                 self.current_action = self.actions.get(&self.matched).cloned();
                 self.do_action(vd);
             }
-            log::info!("matched {:?}, char: {:?}", self.matched, c);
+            log::debug!("matched {:?}, char: {:?}", self.matched, c);
         }
 
         self.matched.len()
