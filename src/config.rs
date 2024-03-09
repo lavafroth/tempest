@@ -48,10 +48,10 @@ pub struct RawBinding {
 
 pub struct Config {
     pub model_path: String,
-    pub wake_phrase: String,
-    pub rest_phrase: String,
     pub actions: BTreeMap<String, Action>,
     pub word_trie: trie_rs::Trie<u8>,
+    pub abstract_triggers: trie_rs::Trie<u8>,
+    pub modes: BTreeMap<String, Mode>,
     pub ollama_model: String,
     pub ollama_endpoint: String,
 }
@@ -327,6 +327,14 @@ where
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Wake,
+    Rest,
+    Infer,
+    Custom(usize),
+}
+
 impl From<RawConfig> for Config {
     fn from(value: RawConfig) -> Self {
         let wake_phrase = value.wake_phrase;
@@ -341,10 +349,25 @@ impl From<RawConfig> for Config {
             .into_iter()
             .map(|b| (b.phrase.to_uppercase(), b.action.into()))
             .collect();
+
+        let mut trie_builder = TrieBuilder::new();
+        trie_builder.push(wake_phrase.to_uppercase());
+        trie_builder.push(rest_phrase.to_uppercase());
+        trie_builder.push("LISTEN");
+
+        let abstract_triggers = trie_builder.build();
+        let modes = [
+            (wake_phrase.to_uppercase(), Mode::Wake),
+            (rest_phrase.to_uppercase(), Mode::Rest),
+            ("LISTEN".to_owned(), Mode::Infer),
+        ]
+        .into_iter()
+        .collect();
+
         Self {
             model_path: value.model_path,
-            wake_phrase,
-            rest_phrase,
+            abstract_triggers,
+            modes,
             actions,
             word_trie,
             ollama_model: value.ollama_model,

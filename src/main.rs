@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use config::Action;
+use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
@@ -39,30 +39,13 @@ impl VirtualInput {
     }
 }
 
-fn subslice_check(s: &str, phrase: &str) -> bool {
-    // This does not allocate
-    if s.eq_ignore_ascii_case(phrase) {
-        return true;
-    }
-    let s = s.to_lowercase();
-    let phrase = phrase.to_lowercase();
-    if let Some(index) = s.find(&phrase) {
-        let mut chars = s.chars();
-        let before = chars.nth(index.saturating_sub(1));
-        let after = chars.nth(index.saturating_add(phrase.len() + 1));
-        match (before, after) {
-            (Some(' ') | None, Some(' ') | None) => true,
-            _ => false,
-        }
-    } else {
-        false
-    }
-}
-
 pub struct TrieMatchBookkeeper {
     pub matched: String,
     pub trie: Trie<u8>,
     pub actions: BTreeMap<String, Action>,
+    pub abstract_triggers: trie_rs::Trie<u8>,
+    pub modes: BTreeMap<String, Mode>,
+    pub abstract_match: String,
     pub current_action: Option<Action>,
 }
 
@@ -70,28 +53,70 @@ impl TrieMatchBookkeeper {
     fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> usize {
         let chars = phrase.chars();
         for c in chars {
-            if self.matched.is_empty() && self.trie.predictive_search(c.to_string()).len() > 0 {
+            if self.matched.is_empty() {
                 self.matched.push(c);
-            } else if !self.matched.is_empty() {
-                let mut new_search = self.matched.clone();
-                new_search.push(c);
-                if self.trie.predictive_search(&new_search).len() > 0 {
+            } else {
+                let new_search = format!("{}{}", self.matched, c);
+                let search_results = self.trie.predictive_search(&new_search).len();
+                if search_results > 0 {
                     self.matched = new_search;
+                    if search_results == 1 {
+                        self.current_action = self.actions.get(&self.matched).cloned();
+                        // TODO: return just how much we have consumed
+                        // the caller should call this function repeatedly
+                        self.do_action(vd);
+                    }
                 } else {
                     self.matched.clear();
                     self.matched.push(c);
                 }
-            }
-
-            if !self.matched.is_empty() && self.trie.predictive_search(&self.matched).len() == 1 {
-                self.current_action = self.actions.get(&self.matched).cloned();
-                self.do_action(vd);
             }
             log::debug!("matched {:?}, char: {:?}", self.matched, c);
         }
 
         self.matched.len()
     }
+    fn word_to_trigger(&mut self, phrase: &str) -> Option<Mode> {
+        let chars = phrase.chars();
+        for c in chars {
+            if self.abstract_match.is_empty() {
+                let search_results = self
+                    .abstract_triggers
+                    .predictive_search(&c.to_string())
+                    .len();
+                if search_results > 0 {
+                    self.abstract_match.push(c);
+                }
+            } else {
+                let new_search = format!("{}{}", self.abstract_match, c);
+                let search_results = self.abstract_triggers.predictive_search(&new_search).len();
+                if search_results > 0 {
+                    log::debug!(
+                        "{:#?}",
+                        self.abstract_triggers
+                            .predictive_search(&new_search)
+                            .into_iter()
+                            .map(|s| String::from_utf8_lossy(&s).to_string())
+                            .collect::<Vec<_>>()
+                    );
+                    self.abstract_match = new_search;
+                    if search_results == 1
+                        && self.abstract_triggers.exact_match(&self.abstract_match)
+                    {
+                        let ret = self.modes.get(&self.abstract_match).cloned();
+                        self.abstract_match.clear();
+                        return ret;
+                    }
+                } else {
+                    self.abstract_match.clear();
+                    self.abstract_match.push(c);
+                }
+            }
+            log::debug!("matched {:?}, char: {:?}", self.abstract_match, c);
+        }
+        None
+    }
+
     fn clear(&mut self) {
         self.current_action = None;
         self.matched.clear();
@@ -176,28 +201,27 @@ fn main() -> Result<()> {
 
     let (session_tx, session_rx) = channel();
 
-    // TODO: change the callback to a channel Sender in the vendored library
     let session = Session::new(&model, session_tx, false, false)
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
     let mut bookkeeper = TrieMatchBookkeeper {
         matched: String::new(),
+        abstract_match: String::new(),
         trie: conf.word_trie,
+        abstract_triggers: conf.abstract_triggers,
+        modes: conf.modes,
         actions: conf.actions,
         current_action: None,
     };
 
     thread::spawn(move || {
         let mut device = VirtualInput(device);
-        let wake_phrase = conf.wake_phrase;
-        let rest_phrase = conf.rest_phrase;
         for result_type in session_rx {
             match result_type {
                 ResultType::RecognitionFinal(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
                     if !state.already_commanded && state.listening {
                         bookkeeper.word_to_action(&sentence, &mut device);
-                        bookkeeper.do_action(&mut device);
                     }
 
                     if state.infer {
@@ -222,19 +246,22 @@ fn main() -> Result<()> {
                         log::info!("[{}] [{}listening] {}", mode, listening_indicator, s);
 
                         if state.listening {
-                            state.listening = !subslice_check(&sentence, &rest_phrase);
+                            state.listening =
+                                !(bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest));
                             state.already_commanded = true;
                         } else {
-                            state.listening = subslice_check(&sentence, &wake_phrase);
+                            state.listening =
+                                bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake);
                             state.already_commanded = true;
                             continue;
                         }
                         if !state.infer && state.listening && sentence.len() > state.length {
                             state.position = sentence.rfind(' ').unwrap_or(state.position);
-                            if subslice_check(s, "LISTEN") {
+                            if bookkeeper.word_to_trigger(s) == Some(Mode::Infer) {
                                 state.infer = true;
                                 state.position = sentence.len();
                             }
+
                             let position = bookkeeper.word_to_action(s, &mut device);
                             if position > 0 {
                                 state.already_commanded = true;
