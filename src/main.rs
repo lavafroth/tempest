@@ -40,7 +40,7 @@ impl VirtualInput {
 }
 
 pub struct TrieMatchBookkeeper {
-    pub matched: String,
+    pub matched: usize,
     pub trie: Trie<u8>,
     pub actions: BTreeMap<String, Action>,
     pub abstract_triggers: trie_rs::Trie<u8>,
@@ -51,31 +51,32 @@ pub struct TrieMatchBookkeeper {
 
 impl TrieMatchBookkeeper {
     fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> usize {
-        let chars = phrase.chars();
-        for c in chars {
-            if self.matched.is_empty() {
-                self.matched.push(c);
-            } else {
-                let new_search = format!("{}{}", self.matched, c);
-                let search_results = self.trie.predictive_search(&new_search).len();
-                if search_results > 0 {
-                    self.matched = new_search;
-                    if search_results == 1 {
-                        self.current_action = self.actions.get(&self.matched).cloned();
+        if phrase.is_empty() {
+            return 0;
+        }
+        let mut start = self.matched;
+        for i in self.matched + 2..phrase.len() + 1 {
+            let search = &phrase[start..i];
+            let search_results = self.trie.predictive_search(search).len();
+            log::debug!("search: {:?}, results: {}", search, search_results);
+            match search_results {
+                0 => start = i - 1,
+                1 => {
+                    if self.trie.exact_match(search) {
+                        self.current_action = self.actions.get(search).cloned();
                         // TODO: return just how much we have consumed
                         // the caller should call this function repeatedly
                         self.do_action(vd);
+                        self.matched = i;
                     }
-                } else {
-                    self.matched.clear();
-                    self.matched.push(c);
                 }
+                _ => {}
             }
-            log::debug!("matched {:?}, char: {:?}", self.matched, c);
         }
 
-        self.matched.len()
+        self.matched
     }
+
     fn word_to_trigger(&mut self, phrase: &str) -> Option<Mode> {
         let chars = phrase.chars();
         for c in chars {
@@ -119,7 +120,7 @@ impl TrieMatchBookkeeper {
 
     fn clear(&mut self) {
         self.current_action = None;
-        self.matched.clear();
+        self.matched = 0;
     }
     fn do_action(&self, vd: &mut VirtualInput) {
         if self.current_action.is_none() {
@@ -205,7 +206,7 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
     let mut bookkeeper = TrieMatchBookkeeper {
-        matched: String::new(),
+        matched: 0,
         abstract_match: String::new(),
         trie: conf.word_trie,
         abstract_triggers: conf.abstract_triggers,
@@ -262,7 +263,7 @@ fn main() -> Result<()> {
                                 state.position = sentence.len();
                             }
 
-                            let position = bookkeeper.word_to_action(s, &mut device);
+                            let position = bookkeeper.word_to_action(&sentence, &mut device);
                             if position > 0 {
                                 state.already_commanded = true;
                                 state.position = sentence.len();
