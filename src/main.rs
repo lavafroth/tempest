@@ -45,7 +45,7 @@ pub struct TrieMatchBookkeeper {
     pub actions: BTreeMap<String, Action>,
     pub abstract_triggers: trie_rs::Trie<u8>,
     pub modes: BTreeMap<String, Mode>,
-    pub modes_consumed_upto: String,
+    pub modes_consumed_upto: usize,
     pub current_action: Option<Action>,
 }
 
@@ -61,12 +61,10 @@ impl TrieMatchBookkeeper {
             log::debug!("search: {:?}, results: {}", search, search_results);
             match search_results {
                 0 => start = i - 1,
-                1 => {
-                    if self.trie.exact_match(search) {
-                        self.current_action = self.actions.get(search).cloned();
-                        self.do_action(vd);
-                        self.actions_consumed_upto = i;
-                    }
+                1 if self.trie.exact_match(search) => {
+                    self.current_action = self.actions.get(search).cloned();
+                    self.do_action(vd);
+                    self.actions_consumed_upto = i;
                 }
                 _ => {}
             }
@@ -74,39 +72,26 @@ impl TrieMatchBookkeeper {
 
         self.actions_consumed_upto != 0
     }
-
     fn word_to_trigger(&mut self, phrase: &str) -> Option<Mode> {
-        let chars = phrase.chars();
-        for c in chars {
-            if self.modes_consumed_upto.is_empty() {
-                let search_results = self
-                    .abstract_triggers
-                    .predictive_search(&c.to_string())
-                    .len();
-                if search_results > 0 {
-                    self.modes_consumed_upto.push(c);
-                }
-            } else {
-                let new_search = format!("{}{}", self.modes_consumed_upto, c);
-                let search_results = self.abstract_triggers.predictive_search(&new_search).len();
-                if search_results > 0 {
-                    self.modes_consumed_upto = new_search;
-                    if search_results == 1
-                        && self
-                            .abstract_triggers
-                            .exact_match(&self.modes_consumed_upto)
-                    {
-                        let ret = self.modes.get(&self.modes_consumed_upto).cloned();
-                        self.modes_consumed_upto.clear();
-                        return ret;
-                    }
-                } else {
-                    self.modes_consumed_upto.clear();
-                    self.modes_consumed_upto.push(c);
-                }
-            }
-            log::debug!("matched {:?}, char: {:?}", self.modes_consumed_upto, c);
+        if phrase.is_empty() {
+            return None;
         }
+        let mut start = self.modes_consumed_upto;
+        for i in self.modes_consumed_upto + 2..phrase.len() + 1 {
+            let search = &phrase[start..i];
+            let search_results = self.abstract_triggers.predictive_search(search).len();
+            log::debug!("search: {:?}, results: {}", search, search_results);
+            match search_results {
+                0 => start = i - 1,
+                1 if self.abstract_triggers.exact_match(search) => {
+                    let ret = self.modes.get(search).cloned();
+                    self.modes_consumed_upto = 0;
+                    return ret;
+                }
+                _ => {}
+            }
+        }
+
         None
     }
 
@@ -199,7 +184,7 @@ fn main() -> Result<()> {
 
     let mut bookkeeper = TrieMatchBookkeeper {
         actions_consumed_upto: 0,
-        modes_consumed_upto: String::new(),
+        modes_consumed_upto: 0,
         trie: conf.word_trie,
         abstract_triggers: conf.abstract_triggers,
         modes: conf.modes,
@@ -240,23 +225,25 @@ fn main() -> Result<()> {
                     let listening_indicator = if state.listening { "" } else { "not " };
                     log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence);
 
-                    if state.listening {
-                        state.listening =
-                            !(bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest));
+                    if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake)
+                    {
+                        state.listening = true;
                         state.already_commanded = true;
-                    } else {
-                        state.listening = bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake);
+                    } else if state.listening
+                        && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest)
+                    {
+                        state.listening = false;
                         state.already_commanded = true;
-                        continue;
                     }
-                    if !state.infer && state.listening && sentence.len() > state.length {
+                    if !state.infer && state.listening && !state.already_commanded {
                         if bookkeeper.word_to_trigger(&sentence) == Some(Mode::Infer) {
                             state.infer = true;
                             continue;
                         }
 
                         if bookkeeper.word_to_action(&sentence, &mut device) {
-                            state.already_commanded = true;
+                            // great I dont fuckin care
+                            // state.already_commanded = true;
                         }
                         state.length = sentence.len();
                     }
