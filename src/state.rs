@@ -1,6 +1,5 @@
 use std::sync::mpsc::Sender;
 pub struct State {
-    pub position: usize,
     pub length: usize,
     pub already_commanded: bool,
     pub listening: bool,
@@ -11,7 +10,6 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            position: 0,
             length: 0,
             already_commanded: true,
             listening: false,
@@ -24,7 +22,6 @@ impl Default for State {
 impl State {
     pub fn clear(&mut self) {
         self.length = 0;
-        self.position = 0;
         self.infer = false;
         self.already_commanded = false;
     }

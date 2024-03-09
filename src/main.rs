@@ -40,22 +40,22 @@ impl VirtualInput {
 }
 
 pub struct TrieMatchBookkeeper {
-    pub matched: usize,
+    pub actions_consumed_upto: usize,
     pub trie: Trie<u8>,
     pub actions: BTreeMap<String, Action>,
     pub abstract_triggers: trie_rs::Trie<u8>,
     pub modes: BTreeMap<String, Mode>,
-    pub abstract_match: String,
+    pub modes_consumed_upto: String,
     pub current_action: Option<Action>,
 }
 
 impl TrieMatchBookkeeper {
-    fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> usize {
+    fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> bool {
         if phrase.is_empty() {
-            return 0;
+            return false;
         }
-        let mut start = self.matched;
-        for i in self.matched + 2..phrase.len() + 1 {
+        let mut start = self.actions_consumed_upto;
+        for i in self.actions_consumed_upto + 2..phrase.len() + 1 {
             let search = &phrase[start..i];
             let search_results = self.trie.predictive_search(search).len();
             log::debug!("search: {:?}, results: {}", search, search_results);
@@ -64,63 +64,55 @@ impl TrieMatchBookkeeper {
                 1 => {
                     if self.trie.exact_match(search) {
                         self.current_action = self.actions.get(search).cloned();
-                        // TODO: return just how much we have consumed
-                        // the caller should call this function repeatedly
                         self.do_action(vd);
-                        self.matched = i;
+                        self.actions_consumed_upto = i;
                     }
                 }
                 _ => {}
             }
         }
 
-        self.matched
+        self.actions_consumed_upto != 0
     }
 
     fn word_to_trigger(&mut self, phrase: &str) -> Option<Mode> {
         let chars = phrase.chars();
         for c in chars {
-            if self.abstract_match.is_empty() {
+            if self.modes_consumed_upto.is_empty() {
                 let search_results = self
                     .abstract_triggers
                     .predictive_search(&c.to_string())
                     .len();
                 if search_results > 0 {
-                    self.abstract_match.push(c);
+                    self.modes_consumed_upto.push(c);
                 }
             } else {
-                let new_search = format!("{}{}", self.abstract_match, c);
+                let new_search = format!("{}{}", self.modes_consumed_upto, c);
                 let search_results = self.abstract_triggers.predictive_search(&new_search).len();
                 if search_results > 0 {
-                    log::debug!(
-                        "{:#?}",
-                        self.abstract_triggers
-                            .predictive_search(&new_search)
-                            .into_iter()
-                            .map(|s| String::from_utf8_lossy(&s).to_string())
-                            .collect::<Vec<_>>()
-                    );
-                    self.abstract_match = new_search;
+                    self.modes_consumed_upto = new_search;
                     if search_results == 1
-                        && self.abstract_triggers.exact_match(&self.abstract_match)
+                        && self
+                            .abstract_triggers
+                            .exact_match(&self.modes_consumed_upto)
                     {
-                        let ret = self.modes.get(&self.abstract_match).cloned();
-                        self.abstract_match.clear();
+                        let ret = self.modes.get(&self.modes_consumed_upto).cloned();
+                        self.modes_consumed_upto.clear();
                         return ret;
                     }
                 } else {
-                    self.abstract_match.clear();
-                    self.abstract_match.push(c);
+                    self.modes_consumed_upto.clear();
+                    self.modes_consumed_upto.push(c);
                 }
             }
-            log::debug!("matched {:?}, char: {:?}", self.abstract_match, c);
+            log::debug!("matched {:?}, char: {:?}", self.modes_consumed_upto, c);
         }
         None
     }
 
     fn clear(&mut self) {
         self.current_action = None;
-        self.matched = 0;
+        self.actions_consumed_upto = 0;
     }
     fn do_action(&self, vd: &mut VirtualInput) {
         if self.current_action.is_none() {
@@ -206,8 +198,8 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
     let mut bookkeeper = TrieMatchBookkeeper {
-        matched: 0,
-        abstract_match: String::new(),
+        actions_consumed_upto: 0,
+        modes_consumed_upto: String::new(),
         trie: conf.word_trie,
         abstract_triggers: conf.abstract_triggers,
         modes: conf.modes,
@@ -226,11 +218,11 @@ fn main() -> Result<()> {
                     }
 
                     if state.infer {
-                        if let Some(prompt) = sentence.get(state.position..) {
+                        if let Some(prompt) = sentence.get(state.length..) {
                             state
                                 .to_ollama
                                 .clone()
-                                .expect("could not get a handle to proompt sender channel")
+                                .expect("could not get a handle to prompt sender channel")
                                 .send(prompt.to_string())
                                 .expect("failed to send proompt");
                         }
@@ -240,36 +232,33 @@ fn main() -> Result<()> {
                 }
                 ResultType::RecognitionPartial(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
-                    if let Some(s) = sentence.get(state.position..) {
-                        // a bunch of indicators for sanity check
-                        let mode = if state.infer { "infer" } else { "eager" };
-                        let listening_indicator = if state.listening { "" } else { "not " };
-                        log::info!("[{}] [{}listening] {}", mode, listening_indicator, s);
+                    if sentence.len() < state.length {
+                        continue;
+                    }
+                    // a bunch of indicators for sanity check
+                    let mode = if state.infer { "infer" } else { "eager" };
+                    let listening_indicator = if state.listening { "" } else { "not " };
+                    log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence);
 
-                        if state.listening {
-                            state.listening =
-                                !(bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest));
-                            state.already_commanded = true;
-                        } else {
-                            state.listening =
-                                bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake);
-                            state.already_commanded = true;
+                    if state.listening {
+                        state.listening =
+                            !(bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest));
+                        state.already_commanded = true;
+                    } else {
+                        state.listening = bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake);
+                        state.already_commanded = true;
+                        continue;
+                    }
+                    if !state.infer && state.listening && sentence.len() > state.length {
+                        if bookkeeper.word_to_trigger(&sentence) == Some(Mode::Infer) {
+                            state.infer = true;
                             continue;
                         }
-                        if !state.infer && state.listening && sentence.len() > state.length {
-                            state.position = sentence.rfind(' ').unwrap_or(state.position);
-                            if bookkeeper.word_to_trigger(s) == Some(Mode::Infer) {
-                                state.infer = true;
-                                state.position = sentence.len();
-                            }
 
-                            let position = bookkeeper.word_to_action(&sentence, &mut device);
-                            if position > 0 {
-                                state.already_commanded = true;
-                                state.position = sentence.len();
-                            }
-                            state.length = sentence.len();
+                        if bookkeeper.word_to_action(&sentence, &mut device) {
+                            state.already_commanded = true;
                         }
+                        state.length = sentence.len();
                     }
                 }
                 _ => {}
