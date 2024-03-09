@@ -67,7 +67,7 @@ pub struct TrieMatchBookkeeper {
 }
 
 impl TrieMatchBookkeeper {
-    fn word_appears_in_phrases(&mut self, phrase: &str, vd: &mut VirtualInput) -> usize {
+    fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> usize {
         let chars = phrase.chars();
         for c in chars {
             if self.matched.is_empty() && self.trie.predictive_search(c.to_string()).len() > 0 {
@@ -76,7 +76,6 @@ impl TrieMatchBookkeeper {
                 let mut new_search = self.matched.clone();
                 new_search.push(c);
                 if self.trie.predictive_search(&new_search).len() > 0 {
-                    // self.internal_matched_crib.replace(new_search);
                     self.matched = new_search;
                 } else {
                     self.matched.clear();
@@ -197,7 +196,7 @@ fn main() -> Result<()> {
                 ResultType::RecognitionFinal(Some(tokens)) => {
                     let sentence = tokens_to_string(tokens);
                     if !state.already_commanded && state.listening {
-                        bookkeeper.word_appears_in_phrases(&sentence, &mut device);
+                        bookkeeper.word_to_action(&sentence, &mut device);
                         bookkeeper.do_action(&mut device);
                     }
 
@@ -236,7 +235,7 @@ fn main() -> Result<()> {
                                 state.infer = true;
                                 state.position = sentence.len();
                             }
-                            let position = bookkeeper.word_appears_in_phrases(s, &mut device);
+                            let position = bookkeeper.word_to_action(s, &mut device);
                             if position > 0 {
                                 state.already_commanded = true;
                                 state.position = sentence.len();
