@@ -1,7 +1,4 @@
 model_path: model.april
-ollama_model: mistral
-ollama_endpoint: "http://localhost:11434/api/chat"
-
 wake_phrase: tempest rise
 rest_phrase: tempest rest
 infer_phrase: tempest listen
@@ -33,3 +30,7 @@ actions:
     command: [xdg-open, "/home/h/Public/dotfiles/hosts/default/configuration.nix"]
   - phrase: system rebuild
     command: [pkexec, nixos-rebuild, switch, "--flake", "/home/h/Public/dotfiles#cafe"]
+
+# experimental
+ollama_model: mistral
+ollama_endpoint: "http://localhost:11434/api/chat"
