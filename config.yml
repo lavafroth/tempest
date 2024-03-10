@@ -1,6 +1,7 @@
 model_path: model.april
 wake_phrase: tempest rise
 rest_phrase: tempest rest
+infer_phrase: tempest listen
 
 actions:
   - phrase: UP

@@ -1,17 +1,20 @@
 use mouse_keyboard_input::key_codes::*;
 use serde::Deserialize;
+use std::collections::BTreeMap;
+use trie_rs::TrieBuilder;
 
 #[derive(Deserialize)]
 pub struct RawConfig {
     pub model_path: String,
     pub wake_phrase: String,
     pub rest_phrase: String,
+    pub infer_phrase: String,
     pub actions: Vec<RawBinding>,
     pub ollama_model: String,
     pub ollama_endpoint: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub enum Action {
     Keys(Vec<u16>),
     Command(Vec<String>),
@@ -36,15 +39,6 @@ impl From<RawAction> for Action {
     }
 }
 
-impl From<RawBinding> for Binding {
-    fn from(value: RawBinding) -> Self {
-        Self {
-            phrase: value.phrase,
-            action: value.action.into(),
-        }
-    }
-}
-
 #[derive(Deserialize)]
 pub struct RawBinding {
     phrase: String,
@@ -55,16 +49,12 @@ pub struct RawBinding {
 
 pub struct Config {
     pub model_path: String,
-    pub wake_phrase: String,
-    pub rest_phrase: String,
-    pub actions: Vec<Binding>,
+    pub actions: BTreeMap<String, Action>,
+    pub word_trie: trie_rs::Trie<u8>,
+    pub abstract_triggers: trie_rs::Trie<u8>,
+    pub modes: BTreeMap<String, Mode>,
     pub ollama_model: String,
     pub ollama_endpoint: String,
-}
-
-pub struct Binding {
-    pub phrase: String,
-    pub action: Action,
 }
 
 fn decode_key<S>(key: S) -> u16
@@ -338,16 +328,50 @@ where
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Wake,
+    Rest,
+    Infer,
+    Custom(usize),
+}
+
 impl From<RawConfig> for Config {
     fn from(value: RawConfig) -> Self {
-        let wake_phrase = value.wake_phrase;
-        let rest_phrase = value.rest_phrase;
-        let actions = value.actions.into_iter().map(|b| b.into()).collect();
+        let wake_phrase = value.wake_phrase.to_uppercase();
+        let rest_phrase = value.rest_phrase.to_uppercase();
+        let infer_phrase = value.infer_phrase.to_uppercase();
+        let mut trie_builder = TrieBuilder::new();
+        for phrase in value.actions.iter().map(|b| b.phrase.to_uppercase()) {
+            trie_builder.push(phrase);
+        }
+        let word_trie = trie_builder.build();
+        let actions = value
+            .actions
+            .into_iter()
+            .map(|b| (b.phrase.to_uppercase(), b.action.into()))
+            .collect();
+
+        let mut trie_builder = TrieBuilder::new();
+        trie_builder.push(wake_phrase.clone());
+        trie_builder.push(rest_phrase.clone());
+        trie_builder.push(infer_phrase.clone());
+
+        let abstract_triggers = trie_builder.build();
+        let modes = [
+            (wake_phrase, Mode::Wake),
+            (rest_phrase, Mode::Rest),
+            (infer_phrase, Mode::Infer),
+        ]
+        .into_iter()
+        .collect();
+
         Self {
             model_path: value.model_path,
-            wake_phrase,
-            rest_phrase,
+            abstract_triggers,
+            modes,
             actions,
+            word_trie,
             ollama_model: value.ollama_model,
             ollama_endpoint: value.ollama_endpoint,
         }
