@@ -3,10 +3,11 @@ use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
+use state::State;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::process::Command;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
 use trie_rs::Trie;
@@ -106,15 +107,14 @@ impl TrieMatchBookkeeper {
         match self.current_action.clone().unwrap() {
             Action::Keys(keys) => vd.key_chord(&keys),
             Action::Command(command) => {
-                if command.len() == 0 {
-                    return;
-                }
-                let args = if command.len() > 1 {
-                    &command[1..]
+                let res = if let Some((command, args)) = command.split_first() {
+                    Command::new(command).args(args).spawn()
+                } else if let Some(command) = command.first() {
+                    Command::new(command).spawn()
                 } else {
-                    &[]
+                    return;
                 };
-                if let Err(e) = Command::new(command.get(0).unwrap()).args(args).spawn() {
+                if let Err(e) = res {
                     error!("failed to run command `{}`: {}", command[0], e);
                 }
             }
@@ -122,6 +122,69 @@ impl TrieMatchBookkeeper {
     }
 }
 
+fn inference_loop(
+    mut device: VirtualInput,
+    mut state: State,
+    mut bookkeeper: TrieMatchBookkeeper,
+    session_rx: Receiver<ResultType>,
+) {
+    for result_type in session_rx {
+        match result_type {
+            ResultType::RecognitionFinal(Some(tokens)) => {
+                let sentence = tokens_to_string(tokens);
+                if !state.already_commanded && state.listening {
+                    bookkeeper.word_to_action(&sentence, &mut device);
+                }
+
+                if state.infer {
+                    if let Some(prompt) = sentence.get(state.length..) {
+                        state
+                            .to_ollama
+                            .clone()
+                            .expect("could not get a handle to prompt sender channel")
+                            .send(prompt.to_string())
+                            .expect("failed to send proompt");
+                    }
+                }
+                state.clear();
+                bookkeeper.clear();
+            }
+            ResultType::RecognitionPartial(Some(tokens)) => {
+                let sentence = tokens_to_string(tokens);
+                if sentence.len() < state.length {
+                    continue;
+                }
+                // a bunch of indicators for sanity check
+                let mode = if state.infer { "infer" } else { "eager" };
+                let listening_indicator = if state.listening { "" } else { "not " };
+                log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence);
+
+                if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake) {
+                    state.listening = true;
+                    state.already_commanded = true;
+                } else if state.listening
+                    && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest)
+                {
+                    state.listening = false;
+                    state.already_commanded = true;
+                }
+                if !state.infer && state.listening && !state.already_commanded {
+                    if bookkeeper.word_to_trigger(&sentence) == Some(Mode::Infer) {
+                        state.infer = true;
+                        continue;
+                    }
+
+                    if bookkeeper.word_to_action(&sentence, &mut device) {
+                        // great I dont fuckin care
+                        // state.already_commanded = true;
+                    }
+                    state.length = sentence.len();
+                }
+            }
+            _ => {}
+        }
+    }
+}
 fn main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Info)?;
 
@@ -141,7 +204,7 @@ fn main() -> Result<()> {
 
     let conf: config::Config = conf.into();
 
-    let mut state = state::State::default();
+    let mut state = State::default();
 
     let model =
         Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
@@ -182,7 +245,7 @@ fn main() -> Result<()> {
     let session = Session::new(&model, session_tx, false, false)
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
-    let mut bookkeeper = TrieMatchBookkeeper {
+    let bookkeeper = TrieMatchBookkeeper {
         actions_consumed_upto: 0,
         modes_consumed_upto: 0,
         trie: conf.word_trie,
@@ -192,66 +255,7 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    thread::spawn(move || {
-        let mut device = VirtualInput(device);
-        for result_type in session_rx {
-            match result_type {
-                ResultType::RecognitionFinal(Some(tokens)) => {
-                    let sentence = tokens_to_string(tokens);
-                    if !state.already_commanded && state.listening {
-                        bookkeeper.word_to_action(&sentence, &mut device);
-                    }
-
-                    if state.infer {
-                        if let Some(prompt) = sentence.get(state.length..) {
-                            state
-                                .to_ollama
-                                .clone()
-                                .expect("could not get a handle to prompt sender channel")
-                                .send(prompt.to_string())
-                                .expect("failed to send proompt");
-                        }
-                    }
-                    state.clear();
-                    bookkeeper.clear();
-                }
-                ResultType::RecognitionPartial(Some(tokens)) => {
-                    let sentence = tokens_to_string(tokens);
-                    if sentence.len() < state.length {
-                        continue;
-                    }
-                    // a bunch of indicators for sanity check
-                    let mode = if state.infer { "infer" } else { "eager" };
-                    let listening_indicator = if state.listening { "" } else { "not " };
-                    log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence);
-
-                    if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake)
-                    {
-                        state.listening = true;
-                        state.already_commanded = true;
-                    } else if state.listening
-                        && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest)
-                    {
-                        state.listening = false;
-                        state.already_commanded = true;
-                    }
-                    if !state.infer && state.listening && !state.already_commanded {
-                        if bookkeeper.word_to_trigger(&sentence) == Some(Mode::Infer) {
-                            state.infer = true;
-                            continue;
-                        }
-
-                        if bookkeeper.word_to_action(&sentence, &mut device) {
-                            // great I dont fuckin care
-                            // state.already_commanded = true;
-                        }
-                        state.length = sentence.len();
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
+    thread::spawn(move || inference_loop(VirtualInput(device), state, bookkeeper, session_rx));
 
     stream.play()?;
 

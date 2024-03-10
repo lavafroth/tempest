@@ -1,8 +1,10 @@
 model_path: model.april
 ollama_model: mistral
 ollama_endpoint: "http://localhost:11434/api/chat"
+
 wake_phrase: tempest rise
 rest_phrase: tempest rest
+infer_phrase: tempest listen
 
 actions:
   - phrase: UP

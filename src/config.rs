@@ -8,6 +8,7 @@ pub struct RawConfig {
     pub model_path: String,
     pub wake_phrase: String,
     pub rest_phrase: String,
+    pub infer_phrase: String,
     pub actions: Vec<RawBinding>,
     pub ollama_model: String,
     pub ollama_endpoint: String,
@@ -337,8 +338,9 @@ pub enum Mode {
 
 impl From<RawConfig> for Config {
     fn from(value: RawConfig) -> Self {
-        let wake_phrase = value.wake_phrase;
-        let rest_phrase = value.rest_phrase;
+        let wake_phrase = value.wake_phrase.to_uppercase();
+        let rest_phrase = value.rest_phrase.to_uppercase();
+        let infer_phrase = value.infer_phrase.to_uppercase();
         let mut trie_builder = TrieBuilder::new();
         for phrase in value.actions.iter().map(|b| b.phrase.to_uppercase()) {
             trie_builder.push(phrase);
@@ -351,15 +353,15 @@ impl From<RawConfig> for Config {
             .collect();
 
         let mut trie_builder = TrieBuilder::new();
-        trie_builder.push(wake_phrase.to_uppercase());
-        trie_builder.push(rest_phrase.to_uppercase());
-        trie_builder.push("LISTEN");
+        trie_builder.push(wake_phrase.clone());
+        trie_builder.push(rest_phrase.clone());
+        trie_builder.push(infer_phrase.clone());
 
         let abstract_triggers = trie_builder.build();
         let modes = [
-            (wake_phrase.to_uppercase(), Mode::Wake),
-            (rest_phrase.to_uppercase(), Mode::Rest),
-            ("LISTEN".to_owned(), Mode::Infer),
+            (wake_phrase, Mode::Wake),
+            (rest_phrase, Mode::Rest),
+            (infer_phrase, Mode::Infer),
         ]
         .into_iter()
         .collect();
