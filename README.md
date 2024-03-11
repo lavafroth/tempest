@@ -7,6 +7,7 @@ Poor man's linux voice automation.
 - [x] Shortcut customization using config files
 - [x] Recording built into the binary
 - [x] Sending fuzzy questions to an LLM through Ollama's API
+- [ ] Built-in understanding of fuzzy terms (experimentally available in `sbert-sentence-matching` branch)
 - [ ] Static builds
 
 ### Getting started
