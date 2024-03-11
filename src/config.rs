@@ -339,23 +339,23 @@ pub enum Mode {
 
 impl From<RawConfig> for Config {
     fn from(value: RawConfig) -> Self {
-        let wake_phrase = value.wake_phrase.to_uppercase();
-        let rest_phrase = value.rest_phrase.to_uppercase();
-        let infer_phrase = value.infer_phrase.to_uppercase();
+        let wake_phrase = value.wake_phrase.to_lowercase();
+        let rest_phrase = value.rest_phrase.to_lowercase();
+        let infer_phrase = value.infer_phrase.to_lowercase();
         let mut trie_builder = TrieBuilder::new();
-        for phrase in value.actions.iter().map(|b| b.phrase.to_uppercase()) {
+        for phrase in value.actions.iter().map(|b| b.phrase.to_lowercase()) {
             trie_builder.push(phrase);
         }
         let word_trie = trie_builder.build();
         let keys = value
             .actions
             .iter()
-            .map(|b| b.phrase.to_uppercase())
+            .map(|b| b.phrase.to_lowercase())
             .collect();
         let actions = value
             .actions
             .into_iter()
-            .map(|b| (b.phrase.to_uppercase(), b.action.into()))
+            .map(|b| (b.phrase.to_lowercase(), b.action.into()))
             .collect();
 
         let mut trie_builder = TrieBuilder::new();

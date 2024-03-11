@@ -4,27 +4,27 @@ rest_phrase: tempest rest
 infer_phrase: tempest listen
 
 actions:
-  - phrase: move window focus up
+  - phrase: focus up
     keys: [super, dot]
-  - phrase: move window focus down
+  - phrase: focus down
     keys: [super, comma]
   - phrase: stack windows
     keys: [super, i]
   - phrase: decouple windows
     keys: [super, o]
-  - phrase: exit a windows
+  - phrase: exit window
     keys: [super, q]
   - phrase: cycle window size
     keys: [super, r]
-  - phrase: fullscreen a window
+  - phrase: fullscreen window
     keys: [super, f]
-  - phrase: display quick settings
+  - phrase: notifications and settings tray
     keys: [super, s]
   - phrase: escape a modal
     keys: [esc]
-  - phrase: open a browser
+  - phrase: open browser
     command: [librewolf]
-  - phrase: open a terminal
+  - phrase: open terminal
     command: [blackbox]
   - phrase: system config
     command: [xdg-open, "/home/h/Public/dotfiles/hosts/default/configuration.nix"]
