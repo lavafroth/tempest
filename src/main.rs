@@ -3,6 +3,7 @@ use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
+use rust_bert::pipelines::zero_shot_classification::ZeroShotClassificationModel;
 use state::State;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -127,13 +128,23 @@ fn inference_loop(
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
+    bert: ZeroShotClassificationModel,
+    keys: Vec<String>,
 ) {
+    let keys: Vec<_> = keys.iter().map(|k| k.as_str()).collect();
     for result_type in session_rx {
         match result_type {
             ResultType::RecognitionFinal(Some(tokens)) => {
                 let sentence = tokens_to_string(tokens);
                 if !state.already_commanded && state.listening {
-                    bookkeeper.word_to_action(&sentence, &mut device);
+                    let output = bert
+                        .predict_multilabel(&[sentence.as_str()], &keys, None, 64)
+                        .unwrap()
+                        .into_iter()
+                        .next()
+                        .unwrap();
+                    let popo = output.iter().max_by(|a, b| a.score.total_cmp(&b.score));
+                    log::info!("you might have meant: {:#?}", popo);
                 }
 
                 if state.infer {
@@ -255,7 +266,18 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    thread::spawn(move || inference_loop(VirtualInput(device), state, bookkeeper, session_rx));
+    let bert = ZeroShotClassificationModel::new(Default::default())?;
+
+    thread::spawn(move || {
+        inference_loop(
+            VirtualInput(device),
+            state,
+            bookkeeper,
+            session_rx,
+            bert,
+            conf.keys,
+        )
+    });
 
     stream.play()?;
 

@@ -51,6 +51,7 @@ pub struct Config {
     pub model_path: String,
     pub actions: BTreeMap<String, Action>,
     pub word_trie: trie_rs::Trie<u8>,
+    pub keys: Vec<String>,
     pub abstract_triggers: trie_rs::Trie<u8>,
     pub modes: BTreeMap<String, Mode>,
     pub ollama_model: String,
@@ -346,6 +347,11 @@ impl From<RawConfig> for Config {
             trie_builder.push(phrase);
         }
         let word_trie = trie_builder.build();
+        let keys = value
+            .actions
+            .iter()
+            .map(|b| b.phrase.to_uppercase())
+            .collect();
         let actions = value
             .actions
             .into_iter()
@@ -370,6 +376,7 @@ impl From<RawConfig> for Config {
             model_path: value.model_path,
             abstract_triggers,
             modes,
+            keys,
             actions,
             word_trie,
             ollama_model: value.ollama_model,

@@ -19,6 +19,8 @@
               onnxruntime
               pkg-config
               alsa-lib
+              openssl.dev
+              stdenv.cc.cc.lib
             ];
 
             LD_LIBRARY_PATH = "${nixpkgs.lib.makeLibraryPath packages}";
