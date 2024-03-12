@@ -19,6 +19,8 @@
               onnxruntime
               pkg-config
               alsa-lib
+              stdenv.cc.cc.lib
+              wget
             ];
 
             LD_LIBRARY_PATH = "${nixpkgs.lib.makeLibraryPath packages}";

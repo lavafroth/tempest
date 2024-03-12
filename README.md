@@ -14,19 +14,25 @@ Poor man's linux voice automation.
 
 Prerequisites:
 - Rust toolchain, either via your package manager or [rustup](https://rustup.rs)
+- C++ standard library
 - `clang`
 - `cmake`
 - `pkg-config`
 - ONNX Runtime
-- Audio library for your OS (`alsa-dev`, `alsa-lib` or `alsa` for linux)
+- Audio library for your OS (linux distros have package names like `alsa-dev`, `alsa-lib` or `alsa`)
+- `wget` to download the models
 
 Luckily, if you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
 
 Note: You might have to add your user to the `uinput` group.
 
-Once you have installed the necessary tools, clone this repo.
+Once you have installed the necessary tools, clone this repo. Run the `./download_models.sh` script to download the models needed for speech recongnition and textual inference.
 
-[Download the April model](https://april.sapples.net/aprilv0_en-us.april) and set the `model_path` in the `config.yml` file to the path of the downloaded model.
+```
+git clone https://github.com/lavafroth/tempest
+cd tempest
+./download_models.sh
+```
 
 You may change the keybindings in the config file in case you are not using GNOME+PaperWM.
 

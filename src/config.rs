@@ -51,6 +51,7 @@ pub struct Config {
     pub model_path: String,
     pub actions: BTreeMap<String, Action>,
     pub word_trie: trie_rs::Trie<u8>,
+    pub keys: Vec<String>,
     pub abstract_triggers: trie_rs::Trie<u8>,
     pub modes: BTreeMap<String, Mode>,
     pub ollama_model: String,
@@ -338,18 +339,23 @@ pub enum Mode {
 
 impl From<RawConfig> for Config {
     fn from(value: RawConfig) -> Self {
-        let wake_phrase = value.wake_phrase.to_uppercase();
-        let rest_phrase = value.rest_phrase.to_uppercase();
-        let infer_phrase = value.infer_phrase.to_uppercase();
+        let wake_phrase = value.wake_phrase.to_lowercase();
+        let rest_phrase = value.rest_phrase.to_lowercase();
+        let infer_phrase = value.infer_phrase.to_lowercase();
         let mut trie_builder = TrieBuilder::new();
-        for phrase in value.actions.iter().map(|b| b.phrase.to_uppercase()) {
+        for phrase in value.actions.iter().map(|b| b.phrase.to_lowercase()) {
             trie_builder.push(phrase);
         }
         let word_trie = trie_builder.build();
+        let keys = value
+            .actions
+            .iter()
+            .map(|b| b.phrase.to_lowercase())
+            .collect();
         let actions = value
             .actions
             .into_iter()
-            .map(|b| (b.phrase.to_uppercase(), b.action.into()))
+            .map(|b| (b.phrase.to_lowercase(), b.action.into()))
             .collect();
 
         let mut trie_builder = TrieBuilder::new();
@@ -370,6 +376,7 @@ impl From<RawConfig> for Config {
             model_path: value.model_path,
             abstract_triggers,
             modes,
+            keys,
             actions,
             word_trie,
             ollama_model: value.ollama_model,

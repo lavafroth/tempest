@@ -3,9 +3,15 @@ use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
+use rust_bert::pipelines::common::{ModelResource, ModelType};
+use rust_bert::pipelines::zero_shot_classification::{
+    ZeroShotClassificationConfig, ZeroShotClassificationModel,
+};
+use rust_bert::resources::LocalResource;
 use state::State;
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
@@ -127,13 +133,30 @@ fn inference_loop(
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
+    bert: ZeroShotClassificationModel,
+    keys: Vec<String>,
 ) {
+    let keys: Vec<_> = keys.iter().map(|k| k.as_str()).collect();
     for result_type in session_rx {
         match result_type {
             ResultType::RecognitionFinal(Some(tokens)) => {
-                let sentence = tokens_to_string(tokens);
+                let sentence = tokens_to_string(tokens).to_lowercase();
                 if !state.already_commanded && state.listening {
-                    bookkeeper.word_to_action(&sentence, &mut device);
+                    let output = bert
+                        .predict_multilabel(&[sentence.trim()], &keys, None, 128)
+                        .unwrap()
+                        .into_iter()
+                        .next()
+                        .unwrap();
+                    if let Some(argmax) = output.iter().max_by(|a, b| a.score.total_cmp(&b.score)) {
+                        if argmax.score > 0.8 {
+                            log::info!("{sentence:#?} is inferred as: {:#?}", argmax.text);
+                            if let Some(action) = bookkeeper.actions.get(&argmax.text) {
+                                bookkeeper.current_action = Some(action.clone());
+                                bookkeeper.do_action(&mut device);
+                            }
+                        }
+                    }
                 }
 
                 if state.infer {
@@ -150,7 +173,7 @@ fn inference_loop(
                 bookkeeper.clear();
             }
             ResultType::RecognitionPartial(Some(tokens)) => {
-                let sentence = tokens_to_string(tokens);
+                let sentence = tokens_to_string(tokens).to_lowercase();
                 if sentence.len() < state.length {
                     continue;
                 }
@@ -175,8 +198,7 @@ fn inference_loop(
                     }
 
                     if bookkeeper.word_to_action(&sentence, &mut device) {
-                        // great I dont fuckin care
-                        // state.already_commanded = true;
+                        state.already_commanded = true;
                     }
                     state.length = sentence.len();
                 }
@@ -205,6 +227,19 @@ fn main() -> Result<()> {
     let conf: config::Config = conf.into();
 
     let mut state = State::default();
+
+    let bert_path: PathBuf = ["models", "bart"].iter().collect();
+    let bert_config = ZeroShotClassificationConfig::new(
+        ModelType::Bart,
+        ModelResource::Torch(bert_path.join("model.ot").into()),
+        LocalResource::from(bert_path.join("config.json")),
+        bert_path.join("vocab.json").into(),
+        Some(LocalResource::from(bert_path.join("merges.txt"))),
+        false,
+        None,
+        None,
+    );
+    let bert = ZeroShotClassificationModel::new(bert_config)?;
 
     let model =
         Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
@@ -255,7 +290,16 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    thread::spawn(move || inference_loop(VirtualInput(device), state, bookkeeper, session_rx));
+    thread::spawn(move || {
+        inference_loop(
+            VirtualInput(device),
+            state,
+            bookkeeper,
+            session_rx,
+            bert,
+            conf.keys,
+        )
+    });
 
     stream.play()?;
 
