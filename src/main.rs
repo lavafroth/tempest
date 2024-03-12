@@ -150,7 +150,7 @@ fn inference_loop(
                         .unwrap();
                     if let Some(argmax) = output.iter().max_by(|a, b| a.score.total_cmp(&b.score)) {
                         if argmax.score > 0.8 {
-                            log::info!("{sentence:#?} is inferred as: {:#?}", argmax);
+                            log::info!("{sentence:#?} is inferred as: {:#?}", argmax.text);
                             if let Some(action) = bookkeeper.actions.get(&argmax.text) {
                                 bookkeeper.current_action = Some(action.clone());
                                 bookkeeper.do_action(&mut device);
@@ -198,8 +198,7 @@ fn inference_loop(
                     }
 
                     if bookkeeper.word_to_action(&sentence, &mut device) {
-                        // great I dont fuckin care
-                        // state.already_commanded = true;
+                        state.already_commanded = true;
                     }
                     state.length = sentence.len();
                 }
