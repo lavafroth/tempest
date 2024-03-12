@@ -7,6 +7,7 @@ use rust_bert::pipelines::common::{ModelResource, ModelType};
 use rust_bert::pipelines::zero_shot_classification::{
     ZeroShotClassificationConfig, ZeroShotClassificationModel,
 };
+use rust_bert::resources::LocalResource;
 use state::State;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -228,20 +229,17 @@ fn main() -> Result<()> {
 
     let mut state = State::default();
 
-    // let beer = ZeroShotClassificationConfig::default();
-    // println!("{:#?}", beer.model_type);
-    // println!("{:#?}", beer.model_resource);
-    // let bert = ZeroShotClassificationModel::new(beer)?;
-    let mut bert_config = ZeroShotClassificationConfig::default();
-    bert_config.model_type = ModelType::Bart;
-    bert_config.model_resource =
-        ModelResource::Torch(PathBuf::from("rustbert/bart-large-mnli/model/04268e8a51b56107a2f46ec95b9a653f9b4dd8f6d20b6cd8647736f083d014d0.86a39d268cf294aedd92adbfd5590c546d36ce9b50aad131068ed48cc73f9552").into());
-    bert_config.config_resource =
-    PathBuf::from("rustbert/bart-large-mnli/config/980f2be6bd282c5079e99199d7554cfd13000433ed0fdc527e7def799e5738fe.4fdc7ce6768977d347b32986aff152e26fcebbda34ef89ac9b114971d0342e09").into();
-    bert_config.vocab_resource =
-    PathBuf::from("rustbert/bart-large-mnli/vocab/7c1ba2435b05451bc3b4da073c8dec9630b22024a65f6c41053caccf2880eb8f.d67d6b367eb24ab43b08ad55e014cf254076934f71d832bbab9ad35644a375ab").into();
-    bert_config.merges_resource =
-    Some(PathBuf::from("rustbert/bart-large-mnli/merges/20b5a00a80e27ae9accbe25672aba42ad2d4d4cb2c4b9359b50ca8e34e107d6d.5d12962c5ee615a4c803841266e9c3be9a691a924f72d395d3a6c6c81157788b").into());
+    let bert_path: PathBuf = ["models", "bart"].iter().collect();
+    let bert_config = ZeroShotClassificationConfig::new(
+        ModelType::Bart,
+        ModelResource::Torch(bert_path.join("model.ot").into()),
+        LocalResource::from(bert_path.join("config.json")),
+        bert_path.join("vocab.json").into(),
+        Some(LocalResource::from(bert_path.join("merges.txt"))),
+        false,
+        None,
+        None,
+    );
     let bert = ZeroShotClassificationModel::new(bert_config)?;
 
     let model =

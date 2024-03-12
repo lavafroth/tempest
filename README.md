@@ -25,7 +25,7 @@ Note: You might have to add your user to the `uinput` group.
 
 Once you have installed the necessary tools, clone this repo.
 
-[Download the April model](https://april.sapples.net/aprilv0_en-us.april) and set the `model_path` in the `config.yml` file to the path of the downloaded model.
+Run the `./download_models.sh` script to download the models needed for speech recongnition and textual inference.
 
 You may change the keybindings in the config file in case you are not using GNOME+PaperWM.
 

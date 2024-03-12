@@ -1,4 +1,4 @@
-model_path: model.april
+model_path: models/april/model.april
 wake_phrase: tempest rise
 rest_phrase: tempest rest
 infer_phrase: tempest listen
@@ -18,7 +18,7 @@ actions:
     keys: [super, r]
   - phrase: fullscreen window
     keys: [super, f]
-  - phrase: notifications and settings tray
+  - phrase: notification settings tray
     keys: [super, s]
   - phrase: escape a modal
     keys: [esc]
