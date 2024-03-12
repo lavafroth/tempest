@@ -7,7 +7,7 @@ Poor man's linux voice automation.
 - [x] Shortcut customization using config files
 - [x] Recording built into the binary
 - [x] Sending fuzzy questions to an LLM through Ollama's API
-- [ ] Built-in understanding of fuzzy terms (experimentally available in `sbert-sentence-matching` branch)
+- [x] Built-in understanding of fuzzy terms (similar sentences are treated as equal)
 - [ ] Static builds
 
 ### Getting started
@@ -46,5 +46,6 @@ cargo run
 
 A huge thank you to these folks in helping me build this tool:
 
-- [Josh Habdas](https://cpdeberg.org/vhs) for creating the original C FFI using bindgen
+- [guillaume-be](https://github.com/guillaume-be/rust-bert) for the Rust-ready library to interact with BERT models.
+- [Josh Habdas](https://cpdeberg.org/vhs) for creating the original C FFI using bindgen.
 - [abb128](https://github.com/abb128) for the C implementation of [April ASR](https://github.com/abb128/april-asr).
