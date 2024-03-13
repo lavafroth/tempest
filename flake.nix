@@ -15,7 +15,6 @@
               cargo
               cmake
               clang
-              clang-tools
               onnxruntime
               pkg-config
               alsa-lib
