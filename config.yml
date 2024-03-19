@@ -1,4 +1,4 @@
-model_path: models/april/model.april
+model_path: model.april
 wake_phrase: tempest rise
 rest_phrase: tempest rest
 infer_phrase: tempest listen
@@ -10,21 +10,21 @@ actions:
     keys: [super, comma]
   - phrase: stack windows
     keys: [super, i]
-  - phrase: decouple windows
+  - phrase: decouple the window
     keys: [super, o]
-  - phrase: exit window
+  - phrase: exit the window
     keys: [super, q]
-  - phrase: cycle window size
+  - phrase: resize the window
     keys: [super, r]
-  - phrase: fullscreen window
+  - phrase: fullscreen the window
     keys: [super, f]
-  - phrase: notification settings tray
+  - phrase: notification and quick settings tray
     keys: [super, s]
   - phrase: escape a modal
     keys: [esc]
-  - phrase: open browser
+  - phrase: open the browser
     command: [librewolf]
-  - phrase: open terminal
+  - phrase: open the terminal
     command: [blackbox]
   - phrase: system config
     command: [xdg-open, "/home/h/Public/dotfiles/hosts/default/configuration.nix"]

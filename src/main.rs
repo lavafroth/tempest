@@ -3,20 +3,22 @@ use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use log::error;
-use rust_bert::pipelines::common::{ModelResource, ModelType};
-use rust_bert::pipelines::zero_shot_classification::{
-    ZeroShotClassificationConfig, ZeroShotClassificationModel,
-};
-use rust_bert::resources::LocalResource;
 use state::State;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use tempest::{init_april_api, Model, ResultType, Session, Token};
 use trie_rs::Trie;
+
+use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
+
+use anyhow::Error as E;
+use candle_core::Tensor;
+use candle_nn::VarBuilder;
+use hf_hub::{api::sync::Api, Repo, RepoType};
+use tokenizers::{PaddingParams, Tokenizer};
 
 use mouse_keyboard_input::VirtualDevice;
 
@@ -133,29 +135,26 @@ fn inference_loop(
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
-    bert: ZeroShotClassificationModel,
-    keys: Vec<String>,
+    mut bert: BertWithCachedKeys,
 ) {
-    let keys: Vec<_> = keys.iter().map(|k| k.as_str()).collect();
     for result_type in session_rx {
         match result_type {
             ResultType::RecognitionFinal(Some(tokens)) => {
                 let sentence = tokens_to_string(tokens).to_lowercase();
                 if !state.already_commanded && state.listening {
-                    let output = bert
-                        .predict_multilabel(&[sentence.trim()], &keys, None, 128)
-                        .unwrap()
-                        .into_iter()
-                        .next()
-                        .unwrap();
-                    if let Some(argmax) = output.iter().max_by(|a, b| a.score.total_cmp(&b.score)) {
-                        if argmax.score > 0.8 {
-                            log::info!("{sentence:#?} is inferred as: {:#?}", argmax.text);
-                            if let Some(action) = bookkeeper.actions.get(&argmax.text) {
+                    match bert.similarities(sentence.trim()) {
+                        Err(e) => {
+                            log::error!("failed to infer action from phrase: `{sentence}`: {e}");
+                            continue;
+                        }
+                        Ok(Some(action_str)) => {
+                            log::info!("{sentence:#?} is inferred as: {:#?}", action_str);
+                            if let Some(action) = bookkeeper.actions.get(action_str) {
                                 bookkeeper.current_action = Some(action.clone());
                                 bookkeeper.do_action(&mut device);
                             }
                         }
+                        _ => {}
                     }
                 }
 
@@ -184,14 +183,14 @@ fn inference_loop(
 
                 if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake) {
                     state.listening = true;
-                    state.already_commanded = true;
+                    state.switched_modes = true;
                 } else if state.listening
                     && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Rest)
                 {
                     state.listening = false;
-                    state.already_commanded = true;
+                    state.switched_modes = true;
                 }
-                if !state.infer && state.listening && !state.already_commanded {
+                if !state.infer && state.listening && !state.switched_modes {
                     if bookkeeper.word_to_trigger(&sentence) == Some(Mode::Infer) {
                         state.infer = true;
                         continue;
@@ -225,21 +224,9 @@ fn main() -> Result<()> {
     };
 
     let conf: config::Config = conf.into();
+    let bert = BertWithCachedKeys::with_keys(conf.keys)?;
 
     let mut state = State::default();
-
-    let bert_path: PathBuf = ["models", "bart"].iter().collect();
-    let bert_config = ZeroShotClassificationConfig::new(
-        ModelType::Bart,
-        ModelResource::Torch(bert_path.join("model.ot").into()),
-        LocalResource::from(bert_path.join("config.json")),
-        bert_path.join("vocab.json").into(),
-        Some(LocalResource::from(bert_path.join("merges.txt"))),
-        false,
-        None,
-        None,
-    );
-    let bert = ZeroShotClassificationModel::new(bert_config)?;
 
     let model =
         Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
@@ -291,14 +278,7 @@ fn main() -> Result<()> {
     };
 
     thread::spawn(move || {
-        inference_loop(
-            VirtualInput(device),
-            state,
-            bookkeeper,
-            session_rx,
-            bert,
-            conf.keys,
-        )
+        inference_loop(VirtualInput(device), state, bookkeeper, session_rx, bert)
     });
 
     stream.play()?;
@@ -307,4 +287,157 @@ fn main() -> Result<()> {
         session.feed_pcm16(bytes);
     }
     Ok(())
+}
+
+pub struct Bert {
+    model: BertModel,
+    tokenizer: Tokenizer,
+    device: candle_core::Device,
+}
+pub struct BertWithCachedKeys {
+    bert: Bert,
+    keys: Vec<String>,
+    embeddings: Tensor,
+}
+
+impl BertWithCachedKeys {
+    fn with_keys(keys: Vec<String>) -> Result<Self> {
+        let mut bert = Bert::new()?;
+        let embeddings = bert.cache_embeddings(keys.iter().map(|s| s.as_str()).collect())?;
+        Ok(Self {
+            bert,
+            keys,
+            embeddings,
+        })
+    }
+
+    fn similarities(&mut self, sentence: &str) -> Result<Option<&str>> {
+        if let Some(pp) = self.bert.tokenizer.get_padding_mut() {
+            pp.strategy = tokenizers::PaddingStrategy::BatchLongest
+        } else {
+            let pp = PaddingParams {
+                strategy: tokenizers::PaddingStrategy::BatchLongest,
+                ..Default::default()
+            };
+            self.bert.tokenizer.with_padding(Some(pp));
+        }
+
+        let tokens = self
+            .bert
+            .tokenizer
+            .encode_batch(vec![sentence], true)
+            .map_err(E::msg)?;
+        let token_ids = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_ids().to_vec();
+                Ok(Tensor::new(tokens.as_slice(), &self.bert.device)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let token_ids = Tensor::stack(&token_ids, 0)?;
+        let token_type_ids = token_ids.zeros_like()?;
+        println!("running inference on batch {:?}", token_ids.shape());
+        let embeddings = self.bert.model.forward(&token_ids, &token_type_ids)?;
+        println!("generated embeddings {:?}", embeddings);
+        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+        let embeddings = normalize_l2(&embeddings)?;
+        println!("pooled embeddings {:?}", embeddings.shape());
+
+        let target = embeddings.get(0)?;
+
+        let mut similarities = vec![];
+        for i in 0..self.keys.len() {
+            let e_i = self.embeddings.get(i)?;
+            let sum_ij = (&e_i * &target)?.sum_all()?.to_scalar::<f32>()?;
+            let sum_i2 = (&e_i * &e_i)?.sum_all()?.to_scalar::<f32>()?;
+            let sum_j2 = (&target * &target)?.sum_all()?.to_scalar::<f32>()?;
+            let cosine_similarity = sum_ij / (sum_i2 * sum_j2).sqrt();
+            similarities.push((cosine_similarity, i))
+        }
+
+        if let Some((similarity, index)) =
+            similarities.into_iter().max_by(|u, v| u.0.total_cmp(&v.0))
+        {
+            println!("similarity: {similarity}");
+            if similarity > 0.33 {
+                return Ok(Some(self.keys[index].as_str()));
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl Bert {
+    fn new() -> Result<Bert> {
+        let device = candle_core::Device::Cpu;
+        let model_id = "sentence-transformers/all-MiniLM-L6-v2".to_string();
+        let revision = "refs/pr/21".to_string();
+        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
+        let (config_filename, tokenizer_filename, weights_filename) = {
+            let api = Api::new()?;
+            let api = api.repo(repo);
+            let config = api.get("config.json")?;
+            let tokenizer = api.get("tokenizer.json")?;
+            let weights = api.get("model.safetensors")?;
+            (config, tokenizer, weights)
+        };
+        let config = std::fs::read_to_string(config_filename)?;
+        let mut config: Config = serde_json::from_str(&config)?;
+        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? };
+        let approximate_gelu = true;
+        if approximate_gelu {
+            config.hidden_act = HiddenAct::GeluApproximate;
+        }
+        let model = BertModel::load(vb, &config)?;
+        Ok(Bert {
+            model,
+            tokenizer,
+            device,
+        })
+    }
+    fn cache_embeddings(&mut self, haystack: Vec<&str>) -> Result<Tensor> {
+        let sentences = haystack.clone();
+        if let Some(pp) = self.tokenizer.get_padding_mut() {
+            pp.strategy = tokenizers::PaddingStrategy::BatchLongest
+        } else {
+            let pp = PaddingParams {
+                strategy: tokenizers::PaddingStrategy::BatchLongest,
+                ..Default::default()
+            };
+            self.tokenizer.with_padding(Some(pp));
+        }
+        let tokens = self
+            .tokenizer
+            .encode_batch(sentences.clone(), true)
+            .map_err(E::msg)?;
+        let token_ids = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_ids().to_vec();
+                Ok(Tensor::new(tokens.as_slice(), &self.device)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let token_ids = Tensor::stack(&token_ids, 0)?;
+        let token_type_ids = token_ids.zeros_like()?;
+        println!("running inference on batch {:?}", token_ids.shape());
+        let embeddings = self.model.forward(&token_ids, &token_type_ids)?;
+        println!("generated embeddings {:?}", embeddings);
+        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+        let embeddings = normalize_l2(&embeddings)?;
+        println!("pooled embeddings {:?}", embeddings.shape());
+        Ok(embeddings)
+    }
+}
+
+pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+    Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }

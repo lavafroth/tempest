@@ -20,6 +20,7 @@
               alsa-lib
               stdenv.cc.cc.lib
               wget
+              openssl.dev
             ];
 
             LD_LIBRARY_PATH = "${nixpkgs.lib.makeLibraryPath packages}";
