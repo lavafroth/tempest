@@ -264,7 +264,7 @@ fn main() -> Result<()> {
 
     let (session_tx, session_rx) = channel();
 
-    let session = Session::new(&model, session_tx, false, false)
+    let session = Session::new(&model, session_tx, true, true)
         .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
 
     let bookkeeper = TrieMatchBookkeeper {
