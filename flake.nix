@@ -1,5 +1,5 @@
 {
-  description = "build lavafroth.is-a.dev locally";
+  description = "devshell for github:lavafroth/tempest";
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
