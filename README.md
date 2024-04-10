@@ -26,7 +26,7 @@ Luckily, if you use NixOS with flakes, you can run `nix develop` in the project 
 
 Note: You might have to add your user to the `uinput` group.
 
-Once you have installed the necessary tools, clone this repo. Run the `./download_models.sh` script to download the models needed for speech recongnition and textual inference.
+Once you have installed the necessary tools, clone this repo. Run the `download_models.sh` script to download the models needed for speech recongnition and textual inference.
 
 ```
 git clone https://github.com/lavafroth/tempest
@@ -42,10 +42,14 @@ Finally, run the following:
 cargo run
 ```
 
+#### Note
+The april model referenced in the download script might not work properly if you
+have a terrible microphone like mine. In that case, you may download an older
+model from [here](https://april.sapples.net/aprilv0_en-us.april) and save it as `model.april` in the project directory.
+
 ### Acknowledgements
 
 A huge thank you to these folks in helping me build this tool:
 
-- [guillaume-be](https://github.com/guillaume-be/rust-bert) for the Rust-ready library to interact with BERT models.
 - [Josh Habdas](https://cpdeberg.org/vhs) for creating the original C FFI using bindgen.
 - [abb128](https://github.com/abb128) for the C implementation of [April ASR](https://github.com/abb128/april-asr).
