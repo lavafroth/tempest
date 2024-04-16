@@ -6,12 +6,13 @@ use log::error;
 use state::State;
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 use tempest_client::{init_april_api, Model, ResultType, Session, Token};
 use trie_rs::Trie;
-use virtualdevice::VirtualInput;
 
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
@@ -24,7 +25,6 @@ use tokenizers::{PaddingParams, Tokenizer};
 mod config;
 mod llm;
 mod state;
-mod virtualdevice;
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
@@ -39,10 +39,11 @@ pub struct TrieMatchBookkeeper {
     pub modes: BTreeMap<String, Mode>,
     pub modes_consumed_upto: usize,
     pub current_action: Option<Action>,
+    pub current_term: Option<String>,
 }
 
 impl TrieMatchBookkeeper {
-    fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> bool {
+    fn word_to_action(&mut self, phrase: &str, stream: &mut UnixStream) -> bool {
         if phrase.is_empty() {
             return false;
         }
@@ -55,7 +56,8 @@ impl TrieMatchBookkeeper {
                 0 => start = i - 1,
                 1 if self.trie.exact_match(search) => {
                     self.current_action = self.actions.get(search).cloned();
-                    self.do_action(vd);
+                    self.current_term = Some(search.to_string());
+                    self.do_action(stream);
                     self.actions_consumed_upto = i;
                 }
                 _ => {}
@@ -90,13 +92,18 @@ impl TrieMatchBookkeeper {
     fn clear(&mut self) {
         self.current_action = None;
         self.actions_consumed_upto = 0;
+        self.current_term = None;
     }
-    fn do_action(&self, vd: &mut VirtualInput) {
+    fn do_action(&self, stream: &mut UnixStream) {
         if self.current_action.is_none() {
             return;
         }
         match self.current_action.clone().unwrap() {
-            Action::Keys(keys) => vd.key_chord(&keys),
+            Action::Keys(_keys) => {
+                stream
+                    .write_all(format!("{}\n", self.current_term.as_ref().unwrap()).as_bytes())
+                    .expect("failed to send current term to socket");
+            }
             Action::Command(command) => {
                 let res = if let Some((command, args)) = command.split_first() {
                     Command::new(command).args(args).spawn()
@@ -114,7 +121,7 @@ impl TrieMatchBookkeeper {
 }
 
 fn inference_loop(
-    mut device: VirtualInput,
+    mut stream: UnixStream,
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
@@ -133,8 +140,9 @@ fn inference_loop(
                         Ok(Some(action_str)) => {
                             log::info!("{sentence:#?} is inferred as: {:#?}", action_str);
                             if let Some(action) = bookkeeper.actions.get(action_str) {
+                                bookkeeper.current_term = Some(action_str.to_string());
                                 bookkeeper.current_action = Some(action.clone());
-                                bookkeeper.do_action(&mut device);
+                                bookkeeper.do_action(&mut stream);
                             }
                         }
                         _ => {}
@@ -162,7 +170,13 @@ fn inference_loop(
                 // a bunch of indicators for sanity check
                 let mode = if state.infer { "infer" } else { "eager" };
                 let listening_indicator = if state.listening { "" } else { "not " };
-                log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence);
+                log::info!(
+                    "[{}] [{}listening] {} {:#?}",
+                    mode,
+                    listening_indicator,
+                    sentence,
+                    bookkeeper.current_term
+                );
 
                 if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake) {
                     state.listening = true;
@@ -179,7 +193,7 @@ fn inference_loop(
                         continue;
                     }
 
-                    if bookkeeper.word_to_action(&sentence, &mut device) {
+                    if bookkeeper.word_to_action(&sentence, &mut stream) {
                         state.already_commanded = true;
                     }
                     state.length = sentence.len();
@@ -255,11 +269,12 @@ fn main() -> Result<()> {
         modes: conf.modes,
         actions: conf.actions,
         current_action: None,
+        current_term: None,
     };
 
-    let input_device = VirtualInput::new()?;
+    let socket = UnixStream::connect("/tmp/tempest.socket")?;
 
-    thread::spawn(move || inference_loop(input_device, state, bookkeeper, session_rx, bert));
+    thread::spawn(move || inference_loop(socket, state, bookkeeper, session_rx, bert));
 
     stream.play()?;
 

@@ -3,7 +3,6 @@ use std::fs::{self, File, Permissions};
 use std::io::{prelude::*, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::time::Duration;
 use virtualdevice::VirtualInput;
 
 mod config;
@@ -21,18 +20,18 @@ fn main() -> Result<()> {
         serde_yaml::from_reader(reader)?
     };
     let conf: config::Config = conf.into();
-    let mut device = VirtualInput::new();
+    let mut device = VirtualInput::new()?;
 
     match listener.accept() {
-        Ok((mut socket, addr)) => {
+        Ok((socket, addr)) => {
             println!("Got a client: {:?} - {:?}", socket, addr);
             let mut reader = BufReader::new(&socket);
             let mut response = String::new();
             while let Ok(_bytes_read) = reader.read_line(&mut response) {
                 let resp = response.trim();
                 println!("got: {}", resp);
-                if let Some(action) = conf.actions.get(resp) {
-                    println!("{:?}", action);
+                if let Some(config::Action::Keys(keys)) = conf.actions.get(resp) {
+                    device.key_chord(keys.as_slice());
                 }
                 response = String::new();
             }
