@@ -9,8 +9,9 @@ use std::fs::File;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
-use tempest::{init_april_api, Model, ResultType, Session, Token};
+use tempest_client::{init_april_api, Model, ResultType, Session, Token};
 use trie_rs::Trie;
+use virtualdevice::VirtualInput;
 
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
@@ -20,32 +21,14 @@ use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
-use mouse_keyboard_input::VirtualDevice;
-
 mod config;
 mod llm;
 mod state;
+mod virtualdevice;
 
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
     tokens_str.join("")
-}
-
-pub struct VirtualInput(VirtualDevice);
-
-impl VirtualInput {
-    fn key_chord(&mut self, keys: &[u16]) {
-        for &key in keys {
-            if let Err(e) = self.0.press(key) {
-                error!("failed to press key {key}: {e}");
-            }
-        }
-        for &key in keys.iter().rev() {
-            if let Err(e) = self.0.release(key) {
-                error!("failed to release key {key}: {e}");
-            }
-        }
-    }
 }
 
 pub struct TrieMatchBookkeeper {
@@ -215,9 +198,6 @@ fn main() -> Result<()> {
 
     init_april_api(1); // Initialize April ASR. Required to load a Model.
 
-    let device = VirtualDevice::default()
-        .map_err(|e| anyhow!("failed to create global uinput virtual device: {e}"))?;
-
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
         serde_yaml::from_reader(reader)?
@@ -277,9 +257,9 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    thread::spawn(move || {
-        inference_loop(VirtualInput(device), state, bookkeeper, session_rx, bert)
-    });
+    let input_device = VirtualInput::new()?;
+
+    thread::spawn(move || inference_loop(input_device, state, bookkeeper, session_rx, bert));
 
     stream.play()?;
 

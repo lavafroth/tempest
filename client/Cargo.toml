@@ -1,0 +1,24 @@
+[package]
+name = "tempest-client"
+version = "0.2.2"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.80"
+aprilasr-sys = { path = "src/aprilasr-sys" }
+candle-core = "0.4.1"
+candle-nn = "0.4.1"
+candle-transformers = "0.4.1"
+cpal = "0.15.2"
+hf-hub = "0.3.2"
+log = "0.4.20"
+mouse-keyboard-input = "0.4.1"
+reqwest = { version = "0.11.24", default-features = false, features = ["json", "blocking", "rustls"] }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+serde_yaml = "0.9.32"
+simple_logger = "4.3.3"
+tokenizers = "0.15.2"
+trie-rs = "0.2.0"

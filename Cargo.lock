@@ -2373,7 +2373,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tempest"
+name = "tempest-client"
 version = "0.2.2"
 dependencies = [
  "anyhow",
@@ -2392,6 +2392,16 @@ dependencies = [
  "simple_logger",
  "tokenizers",
  "trie-rs",
+]
+
+[[package]]
+name = "tempest-daemon"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "log",
+ "mouse-keyboard-input",
+ "serde",
 ]
 
 [[package]]
