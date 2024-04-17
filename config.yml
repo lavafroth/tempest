@@ -6,6 +6,8 @@ infer_phrase: tempest listen
 actions:
   - phrase: focus up
     keys: [super, dot]
+  - phrase: krunner
+    keys: [leftalt, space]
   - phrase: focus down
     keys: [super, comma]
   - phrase: stack windows

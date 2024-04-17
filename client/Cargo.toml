@@ -6,12 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+aes-gcm = "0.10.3"
 anyhow = "1.0.80"
 aprilasr-sys = { path = "src/aprilasr-sys" }
 candle-core = "0.4.1"
 candle-nn = "0.4.1"
 candle-transformers = "0.4.1"
 cpal = "0.15.2"
+hex = "0.4.3"
 hf-hub = "0.3.2"
 log = "0.4.20"
 mouse-keyboard-input = "0.4.1"

@@ -1,3 +1,7 @@
+use aes_gcm::{
+    aead::{Aead, OsRng},
+    AeadCore, Aes256Gcm, Key, KeyInit,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -5,6 +9,7 @@ use cpal::StreamConfig;
 use log::error;
 use state::State;
 use std::collections::BTreeMap;
+use std::env::args;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -26,6 +31,11 @@ mod config;
 mod llm;
 mod state;
 
+pub struct AuthenticatedUnixStream {
+    key: Key<Aes256Gcm>,
+    stream: UnixStream,
+}
+
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
     tokens_str.join("")
@@ -42,7 +52,11 @@ pub struct TrieMatchBookkeeper {
 }
 
 impl TrieMatchBookkeeper {
-    fn word_to_action(&mut self, phrase: &str, stream: &mut Option<UnixStream>) -> bool {
+    fn word_to_action(
+        &mut self,
+        phrase: &str,
+        stream: &mut Option<AuthenticatedUnixStream>,
+    ) -> bool {
         if phrase.is_empty() {
             return false;
         }
@@ -91,7 +105,7 @@ impl TrieMatchBookkeeper {
         self.current_action = None;
         self.actions_consumed_upto = 0;
     }
-    fn do_action(&self, stream: &mut Option<UnixStream>) {
+    fn do_action(&self, stream: &mut Option<AuthenticatedUnixStream>) {
         if self.current_action.is_none() {
             return;
         }
@@ -102,7 +116,15 @@ impl TrieMatchBookkeeper {
                     error!("please make sure the daemon is running as a member of the input / uinput group");
                     return;
                 };
-                if let Err(e) = stream.write_all(format!("{}\n", keys).as_bytes()) {
+                let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+                let cipher = Aes256Gcm::new(&stream.key);
+                let ciphertext = cipher.encrypt(&nonce, keys.as_bytes()).unwrap();
+                let nonce_cat_ciphertext_cat_newline =
+                    format!("{}{}\n", hex::encode(nonce), hex::encode(ciphertext));
+                if let Err(e) = stream
+                    .stream
+                    .write_all(nonce_cat_ciphertext_cat_newline.as_bytes())
+                {
                     error!(
                         "failed to send keyboard shortcut `{}` to daemon socket: {}",
                         keys, e
@@ -127,7 +149,7 @@ impl TrieMatchBookkeeper {
 }
 
 fn inference_loop(
-    mut stream: Option<UnixStream>,
+    mut stream: Option<AuthenticatedUnixStream>,
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
@@ -211,6 +233,12 @@ fn main() -> Result<()> {
 
     init_april_api(1); // Initialize April ASR. Required to load a Model.
 
+    let key = if let Some(key) = args().into_iter().skip(1).next() {
+        let key_bytes = hex::decode(key.as_bytes())?;
+        Some(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
+    } else {
+        None
+    };
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
         serde_yaml::from_reader(reader)?
@@ -270,11 +298,15 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    let socket = match UnixStream::connect("/run/tempest.socket") {
-        Ok(socket) => Some(socket),
-        Err(e) => {
+    let socket = match (UnixStream::connect("/run/tempest.socket"), key) {
+        (Ok(stream), Some(key)) => Some(AuthenticatedUnixStream { stream, key }),
+        (Err(e), Some(_)) => {
             error!("failed to connect to the daemon socket: {e}");
             error!("bindings to keyboard shortcuts require connection to the daemon, they will not work for this session.");
+            None
+        }
+        _ => {
+            error!("token supplied to connect to the daemon is either nonexistent or incorrect");
             None
         }
     };
