@@ -45,8 +45,8 @@ fn main() -> Result<()> {
                 println!("got response: {resp}");
                 let bytes = hex::decode(&resp)?;
                 println!("which decodes to: {bytes:?}");
-                let nonce_bytes = &bytes[..24];
-                let ciphertext = &bytes[24..];
+                let nonce_bytes = &bytes[..12];
+                let ciphertext = &bytes[12..];
 
                 println!("nonce: {nonce_bytes:?}");
                 println!("ciphertext: {ciphertext:?}");
