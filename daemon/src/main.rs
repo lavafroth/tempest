@@ -9,7 +9,7 @@ mod config;
 mod virtualdevice;
 
 fn main() -> Result<()> {
-    let socket_path = "/tmp/tempest.socket";
+    let socket_path = "/run/tempest.socket";
     // Remove the socket if it exists
     let _ = fs::remove_file(socket_path);
     let listener = UnixListener::bind(socket_path)?;

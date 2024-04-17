@@ -270,7 +270,7 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    let socket = match UnixStream::connect("/tmp/tempest.socket") {
+    let socket = match UnixStream::connect("/run/tempest.socket") {
         Ok(socket) => Some(socket),
         Err(e) => {
             error!("failed to connect to the daemon socket: {e}");
