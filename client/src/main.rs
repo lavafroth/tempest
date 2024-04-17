@@ -42,7 +42,7 @@ pub struct TrieMatchBookkeeper {
 }
 
 impl TrieMatchBookkeeper {
-    fn word_to_action(&mut self, phrase: &str, stream: &mut UnixStream) -> bool {
+    fn word_to_action(&mut self, phrase: &str, stream: &mut Option<UnixStream>) -> bool {
         if phrase.is_empty() {
             return false;
         }
@@ -91,15 +91,24 @@ impl TrieMatchBookkeeper {
         self.current_action = None;
         self.actions_consumed_upto = 0;
     }
-    fn do_action(&self, stream: &mut UnixStream) {
+    fn do_action(&self, stream: &mut Option<UnixStream>) {
         if self.current_action.is_none() {
             return;
         }
         match self.current_action.clone().unwrap() {
             Action::Keys(keys) => {
-                stream
-                    .write_all(format!("{}\n", keys).as_bytes())
-                    .expect("failed to send current term to socket");
+                let Some(stream) = stream else {
+                    error!("recognized keybinding will not be executed since the daemon is not running");
+                    error!("please make sure the daemon is running as a member of the input / uinput group");
+                    return;
+                };
+                if let Err(e) = stream.write_all(format!("{}\n", keys).as_bytes()) {
+                    error!(
+                        "failed to send keyboard shortcut `{}` to daemon socket: {}",
+                        keys, e
+                    );
+                    error!("please make sure the daemon is running as a member of the input / uinput group");
+                }
             }
             Action::Command(command) => {
                 let res = if let Some((command, args)) = command.split_first() {
@@ -118,7 +127,7 @@ impl TrieMatchBookkeeper {
 }
 
 fn inference_loop(
-    mut stream: UnixStream,
+    mut stream: Option<UnixStream>,
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
@@ -261,7 +270,14 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    let socket = UnixStream::connect("/tmp/tempest.socket")?;
+    let socket = match UnixStream::connect("/tmp/tempest.socket") {
+        Ok(socket) => Some(socket),
+        Err(e) => {
+            error!("failed to connect to the daemon socket: {e}");
+            error!("bindings to keyboard shortcuts require connection to the daemon, they will not work for this session.");
+            None
+        }
+    };
 
     thread::spawn(move || inference_loop(socket, state, bookkeeper, session_rx, bert));
 
