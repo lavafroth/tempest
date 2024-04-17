@@ -39,7 +39,6 @@ pub struct TrieMatchBookkeeper {
     pub modes: BTreeMap<String, Mode>,
     pub modes_consumed_upto: usize,
     pub current_action: Option<Action>,
-    pub current_term: Option<String>,
 }
 
 impl TrieMatchBookkeeper {
@@ -56,7 +55,6 @@ impl TrieMatchBookkeeper {
                 0 => start = i - 1,
                 1 if self.trie.exact_match(search) => {
                     self.current_action = self.actions.get(search).cloned();
-                    self.current_term = Some(search.to_string());
                     self.do_action(stream);
                     self.actions_consumed_upto = i;
                 }
@@ -92,16 +90,15 @@ impl TrieMatchBookkeeper {
     fn clear(&mut self) {
         self.current_action = None;
         self.actions_consumed_upto = 0;
-        self.current_term = None;
     }
     fn do_action(&self, stream: &mut UnixStream) {
         if self.current_action.is_none() {
             return;
         }
         match self.current_action.clone().unwrap() {
-            Action::Keys(_keys) => {
+            Action::Keys(keys) => {
                 stream
-                    .write_all(format!("{}\n", self.current_term.as_ref().unwrap()).as_bytes())
+                    .write_all(format!("{}\n", keys).as_bytes())
                     .expect("failed to send current term to socket");
             }
             Action::Command(command) => {
@@ -140,7 +137,6 @@ fn inference_loop(
                         Ok(Some(action_str)) => {
                             log::info!("{sentence:#?} is inferred as: {:#?}", action_str);
                             if let Some(action) = bookkeeper.actions.get(action_str) {
-                                bookkeeper.current_term = Some(action_str.to_string());
                                 bookkeeper.current_action = Some(action.clone());
                                 bookkeeper.do_action(&mut stream);
                             }
@@ -170,13 +166,7 @@ fn inference_loop(
                 // a bunch of indicators for sanity check
                 let mode = if state.infer { "infer" } else { "eager" };
                 let listening_indicator = if state.listening { "" } else { "not " };
-                log::info!(
-                    "[{}] [{}listening] {} {:#?}",
-                    mode,
-                    listening_indicator,
-                    sentence,
-                    bookkeeper.current_term
-                );
+                log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence,);
 
                 if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake) {
                     state.listening = true;
@@ -269,7 +259,6 @@ fn main() -> Result<()> {
         modes: conf.modes,
         actions: conf.actions,
         current_action: None,
-        current_term: None,
     };
 
     let socket = UnixStream::connect("/tmp/tempest.socket")?;
