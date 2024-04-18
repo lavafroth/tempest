@@ -1,6 +1,6 @@
 [package]
 name = "tempest-client"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -16,7 +16,6 @@ cpal = "0.15.2"
 hex = "0.4.3"
 hf-hub = "0.3.2"
 log = "0.4.20"
-mouse-keyboard-input = "0.4.1"
 reqwest = { version = "0.11.24", default-features = false, features = ["json", "blocking", "rustls"] }
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
