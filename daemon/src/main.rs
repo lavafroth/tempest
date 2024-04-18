@@ -13,6 +13,7 @@ mod config;
 mod virtualdevice;
 
 fn main() -> Result<()> {
+    env_logger::init();
     let socket_path = "/run/tempest.socket";
     // Remove the socket if it exists
     let _ = fs::remove_file(socket_path);
@@ -31,39 +32,39 @@ fn main() -> Result<()> {
     let conf: config::Config = conf.into();
     let mut device = VirtualInput::new()?;
 
-    match listener.accept() {
-        Ok((socket, addr)) => {
-            println!("Got a client: {:?} - {:?}", socket, addr);
-            let mut reader = BufReader::new(&socket);
-            let mut response = String::new();
-            while let Ok(bytes_read) = reader.read_line(&mut response) {
-                if bytes_read == 0 {
-                    println!("Got an end of stream, ignoring");
-                    continue;
-                }
-                let resp = response.trim();
-                println!("got response: {resp}");
-                let bytes = hex::decode(&resp)?;
-                println!("which decodes to: {bytes:?}");
-                let nonce_bytes = &bytes[..12];
-                let ciphertext = &bytes[12..];
+    loop {
+        log::info!("listening for connections");
+        match listener.accept() {
+            Ok((socket, addr)) => {
+                log::info!("Got a client: {:?} - {:?}", socket.peer_addr(), addr);
+                let mut reader = BufReader::new(&socket);
+                let mut response = String::new();
+                while let Ok(bytes_read) = reader.read_line(&mut response) {
+                    if bytes_read == 0 {
+                        log::info!("Got an end of stream");
+                        break;
+                    }
+                    let bytes = hex::decode(&response.trim())?;
+                    let nonce_bytes = &bytes[..12];
+                    let ciphertext = &bytes[12..];
 
-                println!("nonce: {nonce_bytes:?}");
-                println!("ciphertext: {ciphertext:?}");
-                let nonce = Nonce::<Aes256Gcm>::clone_from_slice(nonce_bytes);
-                let Ok(resp) = cipher.decrypt(&nonce, ciphertext.as_ref()) else {
-                    eprintln!("failed to decrypt ciphertext sent by client");
-                    continue;
-                };
-                let resp = std::str::from_utf8(&resp)?;
-                println!("got: {}", resp);
-                if let Some(config::Action::Keys(keys)) = conf.actions.get(resp) {
-                    device.key_chord(keys.as_slice());
+                    log::debug!("nonce: {nonce_bytes:?}");
+                    log::debug!("ciphertext: {ciphertext:?}");
+                    let nonce = Nonce::<Aes256Gcm>::clone_from_slice(nonce_bytes);
+                    let Ok(resp) = cipher.decrypt(&nonce, ciphertext.as_ref()) else {
+                        log::error!("failed to decrypt ciphertext sent by client");
+                        continue;
+                    };
+                    let resp = std::str::from_utf8(&resp)?;
+                    if let Some(config::Action::Keys(keys)) = conf.actions.get(resp) {
+                        device.key_chord(keys.as_slice());
+                    }
+                    response = String::new();
                 }
-                response = String::new();
             }
+            Err(e) => log::error!("accept function failed: {:?}", e),
         }
-        Err(e) => println!("accept function failed: {:?}", e),
     }
+
     Ok(())
 }
