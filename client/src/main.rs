@@ -1,3 +1,7 @@
+use aes_gcm::{
+    aead::{Aead, OsRng},
+    AeadCore, Aes256Gcm, Key, KeyInit,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -5,11 +9,14 @@ use cpal::StreamConfig;
 use log::error;
 use state::State;
 use std::collections::BTreeMap;
+use std::env::args;
 use std::fs::File;
+use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
-use tempest::{init_april_api, Model, ResultType, Session, Token};
+use tempest_client::{init_april_api, Model, ResultType, Session, Token};
 use trie_rs::Trie;
 
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
@@ -20,32 +27,18 @@ use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
-use mouse_keyboard_input::VirtualDevice;
-
 mod config;
 mod llm;
 mod state;
 
+pub struct AuthenticatedUnixStream {
+    key: Key<Aes256Gcm>,
+    stream: UnixStream,
+}
+
 fn tokens_to_string(tokens: Vec<Token>) -> String {
     let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
     tokens_str.join("")
-}
-
-pub struct VirtualInput(VirtualDevice);
-
-impl VirtualInput {
-    fn key_chord(&mut self, keys: &[u16]) {
-        for &key in keys {
-            if let Err(e) = self.0.press(key) {
-                error!("failed to press key {key}: {e}");
-            }
-        }
-        for &key in keys.iter().rev() {
-            if let Err(e) = self.0.release(key) {
-                error!("failed to release key {key}: {e}");
-            }
-        }
-    }
 }
 
 pub struct TrieMatchBookkeeper {
@@ -59,7 +52,11 @@ pub struct TrieMatchBookkeeper {
 }
 
 impl TrieMatchBookkeeper {
-    fn word_to_action(&mut self, phrase: &str, vd: &mut VirtualInput) -> bool {
+    fn word_to_action(
+        &mut self,
+        phrase: &str,
+        stream: &mut Option<AuthenticatedUnixStream>,
+    ) -> bool {
         if phrase.is_empty() {
             return false;
         }
@@ -72,7 +69,7 @@ impl TrieMatchBookkeeper {
                 0 => start = i - 1,
                 1 if self.trie.exact_match(search) => {
                     self.current_action = self.actions.get(search).cloned();
-                    self.do_action(vd);
+                    self.do_action(stream);
                     self.actions_consumed_upto = i;
                 }
                 _ => {}
@@ -108,12 +105,33 @@ impl TrieMatchBookkeeper {
         self.current_action = None;
         self.actions_consumed_upto = 0;
     }
-    fn do_action(&self, vd: &mut VirtualInput) {
+    fn do_action(&self, stream: &mut Option<AuthenticatedUnixStream>) {
         if self.current_action.is_none() {
             return;
         }
         match self.current_action.clone().unwrap() {
-            Action::Keys(keys) => vd.key_chord(&keys),
+            Action::Keys(keys) => {
+                let Some(stream) = stream else {
+                    error!("recognized keybinding will not be executed since the daemon is not running");
+                    error!("please make sure the daemon is running as a member of the input / uinput group");
+                    return;
+                };
+                let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+                let cipher = Aes256Gcm::new(&stream.key);
+                let ciphertext = cipher.encrypt(&nonce, keys.as_bytes()).unwrap();
+                let nonce_cat_ciphertext_cat_newline =
+                    format!("{}{}\n", hex::encode(nonce), hex::encode(ciphertext));
+                if let Err(e) = stream
+                    .stream
+                    .write_all(nonce_cat_ciphertext_cat_newline.as_bytes())
+                {
+                    error!(
+                        "failed to send keyboard shortcut `{}` to daemon socket: {}",
+                        keys, e
+                    );
+                    error!("please make sure the daemon is running as a member of the input / uinput group");
+                }
+            }
             Action::Command(command) => {
                 let res = if let Some((command, args)) = command.split_first() {
                     Command::new(command).args(args).spawn()
@@ -131,7 +149,7 @@ impl TrieMatchBookkeeper {
 }
 
 fn inference_loop(
-    mut device: VirtualInput,
+    mut stream: Option<AuthenticatedUnixStream>,
     mut state: State,
     mut bookkeeper: TrieMatchBookkeeper,
     session_rx: Receiver<ResultType>,
@@ -151,7 +169,7 @@ fn inference_loop(
                             log::info!("{sentence:#?} is inferred as: {:#?}", action_str);
                             if let Some(action) = bookkeeper.actions.get(action_str) {
                                 bookkeeper.current_action = Some(action.clone());
-                                bookkeeper.do_action(&mut device);
+                                bookkeeper.do_action(&mut stream);
                             }
                         }
                         _ => {}
@@ -179,7 +197,7 @@ fn inference_loop(
                 // a bunch of indicators for sanity check
                 let mode = if state.infer { "infer" } else { "eager" };
                 let listening_indicator = if state.listening { "" } else { "not " };
-                log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence);
+                log::info!("[{}] [{}listening] {}", mode, listening_indicator, sentence,);
 
                 if !state.listening && bookkeeper.word_to_trigger(&sentence) == Some(Mode::Wake) {
                     state.listening = true;
@@ -196,7 +214,7 @@ fn inference_loop(
                         continue;
                     }
 
-                    if bookkeeper.word_to_action(&sentence, &mut device) {
+                    if bookkeeper.word_to_action(&sentence, &mut stream) {
                         state.already_commanded = true;
                     }
                     state.length = sentence.len();
@@ -215,9 +233,12 @@ fn main() -> Result<()> {
 
     init_april_api(1); // Initialize April ASR. Required to load a Model.
 
-    let device = VirtualDevice::default()
-        .map_err(|e| anyhow!("failed to create global uinput virtual device: {e}"))?;
-
+    let key = if let Some(key) = args().into_iter().skip(1).next() {
+        let key_bytes = hex::decode(key.as_bytes())?;
+        Some(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
+    } else {
+        None
+    };
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
         serde_yaml::from_reader(reader)?
@@ -277,9 +298,20 @@ fn main() -> Result<()> {
         current_action: None,
     };
 
-    thread::spawn(move || {
-        inference_loop(VirtualInput(device), state, bookkeeper, session_rx, bert)
-    });
+    let socket = match (UnixStream::connect("/run/tempest.socket"), key) {
+        (Ok(stream), Some(key)) => Some(AuthenticatedUnixStream { stream, key }),
+        (Err(e), Some(_)) => {
+            error!("failed to connect to the daemon socket: {e}");
+            error!("bindings to keyboard shortcuts require connection to the daemon, they will not work for this session.");
+            None
+        }
+        _ => {
+            error!("token supplied to connect to the daemon is either nonexistent or incorrect");
+            None
+        }
+    };
+
+    thread::spawn(move || inference_loop(socket, state, bookkeeper, session_rx, bert));
 
     stream.play()?;
 
