@@ -34,18 +34,46 @@ cd tempest
 ./download_models.sh
 ```
 
-You may change the keybindings in the config file in case you are not using GNOME+PaperWM.
+Change the bindings in the config file to suit your needs.
 
-Finally, run the following:
+Run the following to build the daemon and the client:
 
 ```sh
-cargo run
+cargo build --workspace --release
+```
+
+#### Daemon
+
+The daemon is optional and is only needed if you want phrases in your bindings to perform keyboard shortcuts.
+Since performing keystrokes is a privileged action, you must run the daemon as root.
+
+```sh
+sudo ./target/release/tempest-daemon
+```
+
+This will give a token to authenticate with the daemon.
+
+#### Client
+
+If you have the daemon running in the background, in a different terminal tab, run
+
+```sh
+./target/release/tempest-client the_token_from_the_daemon
+```
+
+where `the_token_from_the_daemon` is the token provided by the daemon.
+
+If you wish to opt out of using the daemon, you can run the client standalone. However, config bindings with keyboard shortcuts will not work.
+
+```sh
+./target/release/tempest-client
 ```
 
 #### Note
-The april model referenced in the download script might not work properly if you
+The april model in the download script might not work properly if you
 have a terrible microphone like mine. In that case, you may download an older
 model from [here](https://april.sapples.net/aprilv0_en-us.april) and save it as `model.april` in the project directory.
+This older model is less accurate in speech recognition but can work with more noisy data.
 
 ### Acknowledgements
 
