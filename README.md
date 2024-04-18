@@ -24,8 +24,6 @@ Prerequisites:
 
 Luckily, if you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
 
-Note: You might have to add your user to the `uinput` group.
-
 Once you have installed the necessary tools, clone this repo. Run the `download_models.sh` script to download the models needed for speech recongnition and textual inference.
 
 ```
