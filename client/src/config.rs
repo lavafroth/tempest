@@ -4,7 +4,6 @@ use trie_rs::TrieBuilder;
 
 #[derive(Deserialize)]
 pub struct RawConfig {
-    pub model_path: String,
     pub wake_phrase: String,
     pub rest_phrase: String,
     pub infer_phrase: String,
@@ -35,7 +34,6 @@ pub struct RawBinding {
 }
 
 pub struct Config {
-    pub model_path: String,
     pub actions: BTreeMap<String, Action>,
     pub word_trie: trie_rs::Trie<u8>,
     pub keys: Vec<String>,
@@ -96,7 +94,6 @@ impl From<RawConfig> for Config {
         .collect();
 
         Self {
-            model_path: value.model_path,
             abstract_triggers,
             modes,
             keys,

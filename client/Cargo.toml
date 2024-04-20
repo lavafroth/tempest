@@ -1,6 +1,6 @@
 [package]
 name = "tempest-client"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -13,14 +13,18 @@ candle-core = "0.4.1"
 candle-nn = "0.4.1"
 candle-transformers = "0.4.1"
 cpal = "0.15.2"
+futures-util = "0.3.30"
 hex = "0.4.3"
 hf-hub = "0.3.2"
+indicatif = "0.17.8"
 log = "0.4.20"
-mouse-keyboard-input = "0.4.1"
-reqwest = { version = "0.11.24", default-features = false, features = ["json", "blocking", "rustls"] }
+reqwest = { version = "0.11.24", default-features = false, features = ["json", "default-tls", "stream", "blocking"] }
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 serde_yaml = "0.9.32"
 simple_logger = "4.3.3"
 tokenizers = "0.15.2"
+tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread"] }
 trie-rs = "0.2.0"
+url = "2.5.0"
+xdg = "2.5.2"
