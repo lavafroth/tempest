@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
-use log::error;
+use log::{error, warn};
 use state::State;
 use std::collections::BTreeMap;
 use std::env::args;
@@ -27,6 +27,7 @@ use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
+mod april_model;
 mod config;
 mod llm;
 mod state;
@@ -112,8 +113,8 @@ impl TrieMatchBookkeeper {
         match self.current_action.clone().unwrap() {
             Action::Keys(keys) => {
                 let Some(stream) = stream else {
-                    error!("recognized keybinding will not be executed since the daemon is not running");
-                    error!("please make sure the daemon is running as a member of the input / uinput group");
+                    warn!("keybinding will not be executed: the daemon is not running");
+                    warn!("please make sure the daemon is running as a member of the input / uinput group");
                     return;
                 };
                 let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -162,7 +163,7 @@ fn inference_loop(
                 if !state.already_commanded && state.listening {
                     match bert.similarities(sentence.trim()) {
                         Err(e) => {
-                            log::error!("failed to infer action from phrase: `{sentence}`: {e}");
+                            error!("failed to infer action from phrase: `{sentence}`: {e}");
                             continue;
                         }
                         Ok(Some(action_str)) => {
@@ -224,7 +225,9 @@ fn inference_loop(
         }
     }
 }
-fn main() -> Result<()> {
+
+#[tokio::main]
+async fn main() -> Result<()> {
     simple_logger::init_with_level(log::Level::Info)?;
 
     let Some(audio_device) = cpal::default_host().default_input_device() else {
@@ -233,12 +236,41 @@ fn main() -> Result<()> {
 
     init_april_api(1); // Initialize April ASR. Required to load a Model.
 
-    let key = if let Some(key) = args().into_iter().skip(1).next() {
-        let key_bytes = hex::decode(key.as_bytes())?;
-        Some(Key::<Aes256Gcm>::from_slice(&key_bytes).clone())
-    } else {
-        None
+    let socket = match (
+        UnixStream::connect("/run/tempest.socket"),
+        args().into_iter().skip(1).next(),
+    ) {
+        (Ok(stream), Some(key)) => {
+            let key_bytes = hex::decode(key.as_bytes())?;
+            let key = Key::<Aes256Gcm>::from_slice(&key_bytes).clone();
+
+            Some(AuthenticatedUnixStream { stream, key })
+        }
+        (Err(e), Some(_)) => {
+            error!("failed to connect to the daemon socket: {e}");
+            warn!("bindings to keyboard shortcuts require connection to the daemon, they will not work for this session.");
+            None
+        }
+        _ => {
+            warn!("token supplied to connect to the daemon is either nonexistent or incorrect");
+            None
+        }
     };
+
+    let xdg_dir = xdg::BaseDirectories::with_prefix("tempest")?;
+    let data_home = xdg_dir.get_data_home();
+    if !data_home.exists() {
+        std::fs::create_dir(&data_home)?;
+    }
+    log::info!(
+        "looking for model in data directory: {}",
+        data_home.display()
+    );
+    let model_path = data_home.join("model.april");
+    if !model_path.exists() {
+        april_model::download(&model_path).await?;
+    }
+
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
         serde_yaml::from_reader(reader)?
@@ -249,8 +281,9 @@ fn main() -> Result<()> {
 
     let mut state = State::default();
 
+    let model_path = model_path.to_string_lossy().to_string();
     let model =
-        Model::new(&conf.model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
+        Model::new(&model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
 
     {
         let (tx, rx) = channel();
@@ -296,19 +329,6 @@ fn main() -> Result<()> {
         modes: conf.modes,
         actions: conf.actions,
         current_action: None,
-    };
-
-    let socket = match (UnixStream::connect("/run/tempest.socket"), key) {
-        (Ok(stream), Some(key)) => Some(AuthenticatedUnixStream { stream, key }),
-        (Err(e), Some(_)) => {
-            error!("failed to connect to the daemon socket: {e}");
-            error!("bindings to keyboard shortcuts require connection to the daemon, they will not work for this session.");
-            None
-        }
-        _ => {
-            error!("token supplied to connect to the daemon is either nonexistent or incorrect");
-            None
-        }
     };
 
     thread::spawn(move || inference_loop(socket, state, bookkeeper, session_rx, bert));
