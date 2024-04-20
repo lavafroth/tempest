@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 pub struct RawConfig {
-    pub model_path: String,
     pub wake_phrase: String,
     pub rest_phrase: String,
     pub infer_phrase: String,
@@ -48,7 +47,6 @@ pub struct RawBinding {
 
 #[derive(Debug)]
 pub struct Config {
-    pub model_path: String,
     pub actions: BTreeMap<String, Action>,
     pub modes: BTreeMap<String, Mode>,
 }
@@ -350,10 +348,6 @@ impl From<RawConfig> for Config {
         .into_iter()
         .collect();
 
-        Self {
-            model_path: value.model_path,
-            modes,
-            actions,
-        }
+        Self { modes, actions }
     }
 }
