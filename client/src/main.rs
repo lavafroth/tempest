@@ -46,7 +46,7 @@ pub struct TrieMatchBookkeeper {
     pub actions_consumed_upto: usize,
     pub trie: Trie<u8>,
     pub actions: BTreeMap<String, Action>,
-    pub abstract_triggers: trie_rs::Trie<u8>,
+    pub abstract_triggers: Trie<u8>,
     pub modes: BTreeMap<String, Mode>,
     pub modes_consumed_upto: usize,
     pub current_action: Option<Action>,
@@ -257,8 +257,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let xdg_dir = xdg::BaseDirectories::with_prefix("tempest")?;
-    let data_home = xdg_dir.get_data_home();
+    let data_home = xdg::BaseDirectories::with_prefix("tempest")?.get_data_home();
     if !data_home.exists() {
         std::fs::create_dir(&data_home)?;
     }
@@ -364,41 +363,7 @@ impl BertWithCachedKeys {
     }
 
     fn similarities(&mut self, sentence: &str) -> Result<Option<&str>> {
-        if let Some(pp) = self.bert.tokenizer.get_padding_mut() {
-            pp.strategy = tokenizers::PaddingStrategy::BatchLongest
-        } else {
-            let pp = PaddingParams {
-                strategy: tokenizers::PaddingStrategy::BatchLongest,
-                ..Default::default()
-            };
-            self.bert.tokenizer.with_padding(Some(pp));
-        }
-
-        let tokens = self
-            .bert
-            .tokenizer
-            .encode_batch(vec![sentence], true)
-            .map_err(E::msg)?;
-        let token_ids = tokens
-            .iter()
-            .map(|tokens| {
-                let tokens = tokens.get_ids().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), &self.bert.device)?)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let token_ids = Tensor::stack(&token_ids, 0)?;
-        let token_type_ids = token_ids.zeros_like()?;
-        println!("running inference on batch {:?}", token_ids.shape());
-        let embeddings = self.bert.model.forward(&token_ids, &token_type_ids)?;
-        println!("generated embeddings {:?}", embeddings);
-        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
-        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
-        let embeddings = normalize_l2(&embeddings)?;
-        println!("pooled embeddings {:?}", embeddings.shape());
-
-        let target = embeddings.get(0)?;
+        let target = self.bert.cache_embeddings(vec![sentence])?.get(0)?;
 
         let mut similarities = vec![];
         for i in 0..self.keys.len() {
