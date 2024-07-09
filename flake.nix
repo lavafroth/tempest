@@ -19,7 +19,6 @@
               pkg-config
               alsa-lib
               stdenv.cc.cc.lib
-              wget
               openssl.dev
             ];
 
