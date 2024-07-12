@@ -2,7 +2,7 @@ use aes_gcm::{
     aead::{Aead, OsRng},
     AeadCore, Aes256Gcm, Key, KeyInit,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use config::{Action, Mode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
@@ -16,8 +16,8 @@ use std::os::unix::net::UnixStream;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
-use tempest_client::{init_april_api, Model, ResultType, Session, Token};
 use trie_rs::Trie;
+use vosk::{Model, Recognizer};
 
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
@@ -27,19 +27,14 @@ use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
-mod april_model;
 mod config;
 mod llm;
+mod model;
 mod state;
 
 pub struct AuthenticatedUnixStream {
     key: Key<Aes256Gcm>,
     stream: UnixStream,
-}
-
-fn tokens_to_string(tokens: Vec<Token>) -> String {
-    let tokens_str: Vec<String> = tokens.iter().map(|t| t.token()).collect();
-    tokens_str.join("")
 }
 
 pub struct TrieMatchBookkeeper {
@@ -158,8 +153,8 @@ fn inference_loop(
 ) {
     for result_type in session_rx {
         match result_type {
-            ResultType::RecognitionFinal(Some(tokens)) => {
-                let sentence = tokens_to_string(tokens).to_lowercase();
+            ResultType::Final(sentence) => {
+                log::info!("[final] {}", sentence);
                 if !state.already_commanded && state.listening {
                     match bert.similarities(sentence.trim()) {
                         Err(e) => {
@@ -190,8 +185,7 @@ fn inference_loop(
                 state.clear();
                 bookkeeper.clear();
             }
-            ResultType::RecognitionPartial(Some(tokens)) => {
-                let sentence = tokens_to_string(tokens).to_lowercase();
+            ResultType::Partial(sentence) => {
                 if sentence.len() < state.length {
                     continue;
                 }
@@ -221,7 +215,6 @@ fn inference_loop(
                     state.length = sentence.len();
                 }
             }
-            _ => {}
         }
     }
 }
@@ -233,8 +226,6 @@ async fn main() -> Result<()> {
     let Some(audio_device) = cpal::default_host().default_input_device() else {
         bail!("no audio input device available");
     };
-
-    init_april_api(1); // Initialize April ASR. Required to load a Model.
 
     let socket = match (
         UnixStream::connect("/run/tempest.socket"),
@@ -265,10 +256,22 @@ async fn main() -> Result<()> {
         "looking for model in data directory: {}",
         data_home.display()
     );
-    let model_path = data_home.join("model.april");
+
+    log::info!(
+        "looking for model in data directory: {}",
+        data_home.display()
+    );
+    let model_path = data_home.join("model");
     if !model_path.exists() {
-        april_model::download(&model_path).await?;
+        model::download(&model_path).await?;
     }
+    let model = Model::new(model_path.to_string_lossy().to_string())
+        .context("failed to load vosk model into memory")?;
+    let mut recognizer = Recognizer::new(&model, 16000.0).unwrap();
+
+    recognizer.set_max_alternatives(10);
+    recognizer.set_words(true);
+    recognizer.set_partial_words(true);
 
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
@@ -279,10 +282,6 @@ async fn main() -> Result<()> {
     let bert = BertWithCachedKeys::with_keys(conf.keys)?;
 
     let mut state = State::default();
-
-    let model_path = model_path.to_string_lossy().to_string();
-    let model =
-        Model::new(&model_path).map_err(|e| anyhow!("failed to load april-asr model: {e}"))?;
 
     {
         let (tx, rx) = channel();
@@ -317,9 +316,6 @@ async fn main() -> Result<()> {
 
     let (session_tx, session_rx) = channel();
 
-    let session = Session::new(&model, session_tx, true, true)
-        .map_err(|e| anyhow!("failed to create april-asr speech recognition session: {e}"))?;
-
     let bookkeeper = TrieMatchBookkeeper {
         actions_consumed_upto: 0,
         modes_consumed_upto: 0,
@@ -334,10 +330,45 @@ async fn main() -> Result<()> {
 
     stream.play()?;
 
-    for bytes in rx {
-        session.feed_pcm16(bytes);
+    let mut last_partial = String::default();
+    let mut last_crib = 0;
+    let mut toc = std::time::Instant::now();
+    for sample in rx {
+        recognizer.accept_waveform(&sample);
+        let partial_result = recognizer.partial_result();
+        let partial_text = partial_result.partial.to_string();
+        let crib = partial_result.partial_result.len();
+        let tic = std::time::Instant::now();
+        if crib == last_crib && last_crib != 0 && tic - toc > std::time::Duration::from_secs(3) {
+            let final_result = recognizer
+                .final_result()
+                .single()
+                .map(|s| s.text.to_string())
+                .unwrap_or(partial_text.clone());
+            session_tx.send(ResultType::Final(final_result)).unwrap();
+        } else {
+            if crib != last_crib {
+                last_crib = crib;
+                toc = tic;
+            }
+            if partial_text.is_empty() {
+                continue;
+            }
+            if partial_text == last_partial {
+                continue;
+            }
+            session_tx
+                .send(ResultType::Partial(partial_text.clone()))
+                .unwrap();
+        }
+        last_partial = partial_text;
     }
     Ok(())
+}
+
+pub enum ResultType {
+    Partial(String),
+    Final(String),
 }
 
 pub struct Bert {

@@ -12,18 +12,17 @@ Poor man's linux voice automation.
 
 ### Getting started
 
-Prerequisites:
+#### Prerequisites
 - Rust toolchain, either via your package manager or [rustup](https://rustup.rs)
 - C++ standard library
 - `clang`
 - `cmake`
 - `pkg-config`
-- ONNX Runtime
 - Audio library for your OS (linux distros have package names like `alsa-dev`, `alsa-lib` or `alsa`)
 
-Luckily, if you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
+If you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
 
-Once you have installed the necessary tools, clone this repo.
+#### Building
 
 ```
 git clone https://github.com/lavafroth/tempest
@@ -38,7 +37,7 @@ Run the following to build the daemon and the client:
 cargo build --workspace --release
 ```
 
-#### Daemon
+##### Daemon
 
 The daemon is optional and is only needed if you want phrases in your bindings to perform keyboard shortcuts.
 Since performing keystrokes is a privileged action, you must run the daemon as root.
@@ -49,7 +48,7 @@ sudo ./target/release/tempest-daemon
 
 This will give a token to authenticate with the daemon.
 
-#### Client
+##### Client
 
 If you have the daemon running in the background, in a different terminal tab, run
 
@@ -66,11 +65,4 @@ You can alternatively run the client as standalone. However, config bindings wit
 ./target/release/tempest-client
 ```
 
-On first run, the client will prompt you to download the models.
-
-### Acknowledgements
-
-A huge thank you to these folks in helping me build this tool:
-
-- [Josh Habdas](https://cpdeberg.org/vhs) for creating the original C FFI using bindgen.
-- [abb128](https://github.com/abb128) for the C implementation of [April ASR](https://github.com/abb128/april-asr).
+On first run, the client will prompt you to download a models.
