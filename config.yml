@@ -23,7 +23,7 @@ actions:
     keys: [super, s]
   - phrase: escape a modal
     keys: [esc]
-  - phrase: open the browser
+  - phrase: open the web browser
     command: [librewolf]
   - phrase: open the terminal
     command: [blackbox]

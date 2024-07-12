@@ -36,7 +36,6 @@
               cargo
               cmake
               clang
-              onnxruntime
               pkg-config
               alsa-lib
               stdenv.cc.cc.lib
