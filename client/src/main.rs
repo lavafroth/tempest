@@ -29,6 +29,7 @@ use tokenizers::{PaddingParams, Tokenizer};
 
 mod config;
 mod llm;
+mod model;
 mod state;
 
 pub struct AuthenticatedUnixStream {
@@ -226,13 +227,6 @@ async fn main() -> Result<()> {
         bail!("no audio input device available");
     };
 
-    let model = Model::new("vosk-model-small-en-us-0.15").unwrap();
-    let mut recognizer = Recognizer::new(&model, 16000.0).unwrap();
-
-    recognizer.set_max_alternatives(10);
-    recognizer.set_words(true);
-    recognizer.set_partial_words(true);
-
     let socket = match (
         UnixStream::connect("/run/tempest.socket"),
         args().into_iter().skip(1).next(),
@@ -262,6 +256,22 @@ async fn main() -> Result<()> {
         "looking for model in data directory: {}",
         data_home.display()
     );
+
+    log::info!(
+        "looking for model in data directory: {}",
+        data_home.display()
+    );
+    let model_path = data_home.join("model");
+    if !model_path.exists() {
+        model::download(&model_path).await?;
+    }
+    let model = Model::new(model_path.to_string_lossy().to_string())
+        .context("failed to load vosk model into memory")?;
+    let mut recognizer = Recognizer::new(&model, 16000.0).unwrap();
+
+    recognizer.set_max_alternatives(10);
+    recognizer.set_words(true);
+    recognizer.set_partial_words(true);
 
     let conf: config::RawConfig = {
         let reader = File::open("config.yml")?;
