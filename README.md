@@ -18,9 +18,10 @@ Poor man's linux voice automation.
 - `clang`
 - `cmake`
 - `pkg-config`
+- `libvosk` in `LD_LIBRARY_PATH`
 - Audio library for your OS (linux distros have package names like `alsa-dev`, `alsa-lib` or `alsa`)
 
-If you use NixOS with flakes, you can run `nix develop` in the project directory to get a dev shell with all the dependencies installed.
+If you use Nix flakes, run `nix develop` in the project directory to get a dev shell with the dependencies installed.
 
 #### Building
 
