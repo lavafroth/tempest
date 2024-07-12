@@ -65,4 +65,4 @@ You can alternatively run the client as standalone. However, config bindings wit
 ./target/release/tempest-client
 ```
 
-On first run, the client will prompt you to download a models.
+On first run, the client will prompt you to download models.
