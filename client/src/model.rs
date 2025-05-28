@@ -27,16 +27,15 @@ pub async fn download(path: &Path) -> Result<()> {
     }
     println!("default: 1");
 
-    let url = match stdin()
+    let url_index = stdin()
         .lock()
         .lines()
         .next()
         .and_then(|res| res.ok())
         .and_then(|s| s.parse::<usize>().ok())
-    {
-        Some(i) => Url::parse(&links[i - 1])?,
-        _ => Url::parse(&links[0])?,
-    };
+        .map(|i| i - 1)
+        .unwrap_or_default();
+    let url = Url::parse(&links[url_index])?;
 
     // Create a progress bar with the expected file size
     let client = reqwest::Client::new();
@@ -64,49 +63,42 @@ pub async fn download(path: &Path) -> Result<()> {
         }
     }
 
-    let file = File::open(&dest)?;
+    {
+        let file = File::open(&dest)?;
 
-    // Create a ZipArchive from the file.
-    let mut archive = zip::ZipArchive::new(file)?;
+        // Create a ZipArchive from the file.
+        let mut archive = zip::ZipArchive::new(file)?;
 
-    // Iterate over each file in the archive.
-    for i in 0..archive.len() {
-        // Get the file at the current index.
-        let mut file = archive.by_index(i)?;
+        // Iterate over each file in the archive.
+        for i in 0..archive.len() {
+            // Get the file at the current index.
+            let mut file = archive.by_index(i)?;
 
-        // Get the path to extract the file to.
-        let outpath = match file.enclosed_name() {
-            Some(p) => path.join(PathBuf::from_iter(p.components().skip(1))),
-            None => continue, // Skip to the next file if the path is None.
-        };
+            // Get the path to extract the file to.
+            let outpath = match file.enclosed_name() {
+                Some(p) => path.join(PathBuf::from_iter(p.components().skip(1))),
+                None => continue, // Skip to the next file if the path is None.
+            };
 
-        // Check if the file is a directory.
-        if file.name().ends_with('/') {
-            fs::create_dir_all(&outpath)?; // Create the directory.
-        } else {
-            // Create parent directories if they don't exist.
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(&p)?;
+            // Check if the file is a directory.
+            if file.name().ends_with('/') {
+                fs::create_dir_all(&outpath)?; // Create the directory.
+            } else {
+                // Create parent directories if they don't exist.
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        fs::create_dir_all(&p)?;
+                    }
                 }
-            }
 
-            // Create and copy the file contents to the output path.
-            let mut outfile = File::create(&outpath)?;
-            copy(&mut file, &mut outfile)?;
-        }
-
-        // Set file permissions if running on a Unix-like system.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            if let Some(mode) = file.unix_mode() {
-                fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
+                // Create and copy the file contents to the output path.
+                let mut outfile = File::create(&outpath)?;
+                copy(&mut file, &mut outfile)?;
             }
         }
     }
-    pb.finish_with_message("Download complete!");
+    std::fs::remove_file(dest)?;
+    pb.finish_with_message("Downloaded!");
 
     Ok(())
 }
