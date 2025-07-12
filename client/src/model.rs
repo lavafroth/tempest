@@ -2,26 +2,25 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::warn;
-use soup::prelude::*;
 use std::fs::{self, File};
 use std::io::copy;
 use std::io::{stdin, BufRead, Write};
 use std::path::{Path, PathBuf};
 use url::Url;
 pub async fn download(path: &Path) -> Result<()> {
-    warn!("speech recognition model does not exist in data directory: prompting for download");
-    println!("Choose a model to download:");
     let listing = reqwest::get("https://alphacephei.com/vosk/models")
         .await?
         .text()
         .await?;
-    let soup = Soup::new(&listing);
-    let links: Vec<_> = soup
-        .tag("a")
-        .find_all()
-        .filter_map(|link| link.get("href"))
-        .filter(|href| href.starts_with("https://alphacephei.com/vosk/models"))
+    let re = regex::Regex::new(r"https:\/\/alphacephei\.com\/vosk\/models\/.*?\.zip")
+        .expect("failed to initialize regex for matching model download links");
+    let links: Vec<String> = re
+        .find_iter(&listing)
+        .map(|v| v.as_str().to_string())
         .collect();
+
+    warn!("speech recognition model does not exist in data directory: prompting for download");
+    println!("Choose a model to download:");
     for (i, link) in links.iter().enumerate() {
         println!("{}. {}", i + 1, link);
     }
