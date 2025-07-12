@@ -334,7 +334,7 @@ async fn main() -> Result<()> {
     let mut last_crib = 0;
     let mut toc = std::time::Instant::now();
     for sample in rx {
-        recognizer.accept_waveform(&sample);
+        recognizer.accept_waveform(&sample)?;
         let partial_result = recognizer.partial_result();
         let partial_text = partial_result.partial.to_string();
         let crib = partial_result.partial_result.len();
@@ -475,7 +475,7 @@ impl Bert {
         let token_ids = Tensor::stack(&token_ids, 0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("running inference on batch {:?}", token_ids.shape());
-        let embeddings = self.model.forward(&token_ids, &token_type_ids)?;
+        let embeddings = self.model.forward(&token_ids, &token_type_ids, None)?;
         println!("generated embeddings {:?}", embeddings);
         // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
         let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;

@@ -1,6 +1,6 @@
 [package]
 name = "tempest-client"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 build = 'build.rs'
 
@@ -9,9 +9,9 @@ build = 'build.rs'
 [dependencies]
 aes-gcm = "0.10.3"
 anyhow = "1.0.80"
-candle-core = "0.4.1"
-candle-nn = "0.4.1"
-candle-transformers = "0.4.1"
+candle-core = "0.9.1"
+candle-nn = "0.9.1"
+candle-transformers = "0.9.1"
 cpal = "0.15.2"
 futures-util = "0.3.30"
 hex = "0.4.3"
